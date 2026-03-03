@@ -47,33 +47,17 @@ const config = {
   host: process.env.HOST || '127.0.0.1',
   port: Number(process.env.PORT || 8787),
   authToken: process.env.BACKEND_AUTH_TOKEN || '',
-  geminiApiKey: process.env.GEMINI_API_KEY || '',
-  openaiApiKey: process.env.OPENAI_API_KEY || '',
-  geminiModel: process.env.GEMINI_MODEL || 'gemini-2.5-flash',
-  openaiVisionModel: process.env.OPENAI_VISION_MODEL || 'gpt-4o-mini',
-  openaiTextModel: process.env.OPENAI_TEXT_MODEL || 'gpt-4o-mini',
   ocrServiceUrl: String(process.env.OCR_PIPELINE_URL || 'http://127.0.0.1:8788').trim().replace(/\/+$/, ''),
-  ocrServiceTimeoutMs: Number(process.env.OCR_PIPELINE_TIMEOUT_MS || 90000),
-  translationCacheTtlMs: Number(process.env.TRANSLATION_CACHE_TTL_MS || 86400000),
-  enablePublicTranslationFallback: String(process.env.ENABLE_PUBLIC_TRANSLATION_FALLBACK || 'true') !== 'false'
+  ocrServiceTimeoutMs: Number(process.env.OCR_PIPELINE_TIMEOUT_MS || 120000),
+  translationCacheTtlMs: Number(process.env.TRANSLATION_CACHE_TTL_MS || 86400000)
 };
 
-const LIBRE_TRANSLATE_ENDPOINTS = [
-  'https://libretranslate.de/translate',
-  'https://translate.argosopentech.com/translate',
-  'https://libretranslate.pussthecat.org/translate',
-  'https://lt.vern.cc/translate'
-];
-
-const LOCAL_OCR_ENGINES = new Set(['auto', 'manga-stack', 'paddle', 'mangaocr', 'doctr']);
 const SUPPORTED_OCR_ENGINES = [
   { id: 'auto', label: 'Stack manga auto' },
   { id: 'manga-stack', label: 'Stack manga auto' },
   { id: 'paddle', label: 'PaddleOCR' },
   { id: 'mangaocr', label: 'MangaOCR refine' },
-  { id: 'doctr', label: 'docTR' },
-  { id: 'gemini', label: 'Gemini Vision' },
-  { id: 'openai', label: 'OpenAI Vision' }
+  { id: 'doctr', label: 'docTR' }
 ];
 const SUPPORTED_OCR_ENGINE_IDS = new Set(SUPPORTED_OCR_ENGINES.map(engine => engine.id));
 
@@ -82,49 +66,6 @@ const OCR_HEALTH_TTL_MS = Number(process.env.OCR_HEALTH_TTL_MS || 15000);
 const OCR_HEALTH_TIMEOUT_MS = Number(process.env.OCR_HEALTH_TIMEOUT_MS || 2500);
 let ocrHealthCache = null;
 let ocrHealthRefreshPromise = null;
-
-const OCR_PROMPT = `Tu es un expert en traduction de manga/manhwa.
-Analyse cette image de bande dessinee coreenne ou japonaise.
-Extrais TOUT le texte visible (bulles de dialogue, SFX, narration, onomatopees).
-Traduis chaque texte de l'anglais vers le francais.
-
-Reponds UNIQUEMENT en JSON valide, sans markdown, sans backticks, avec cette structure :
-{
-  "blocks": [
-    {
-      "original": "texte original en anglais",
-      "translated": "traduction en francais",
-      "type": "dialogue|thought|sfx|narration|caption",
-      "bbox": {
-        "x": 0.12,
-        "y": 0.18,
-        "width": 0.34,
-        "height": 0.11
-      },
-      "tone": "calm|tense|urgent|angry|sad|dramatic|playful|whisper|neutral",
-      "style": {
-        "align": "center|left|right",
-        "lettering": "dialogue|narration|caption|sfx|handwritten|thought",
-        "emphasis": "soft|normal|strong|extreme",
-        "casing": "mixed|upper|lower",
-        "italic": false,
-        "weight": 700
-      }
-    }
-  ]
-}
-
-Le champ bbox est obligatoire.
-Les coordonnees sont normalisees entre 0 et 1 par rapport a l'image entiere.
-x et y indiquent le coin haut-gauche du bloc.
-Un bloc correspond a une bulle, une narration, ou un groupe de texte visuellement coherent.
-Le bbox doit representer la zone disponible pour re-composer le texte francais a l'interieur de la bulle ou du cartouche.
-Le bbox ne doit pas couvrir toute l'image, ni chevaucher inutilement une autre bulle.
-La traduction doit respecter le ton, le sous-texte, l'intention dramatique, la relation entre les personnages et le rythme de lecture.
-Cherche a rester fidele a la voix de l'auteur plutot qu'a faire une traduction mot a mot.
-
-Si aucun texte n'est detecte, reponds : {"blocks": []}
-Sois precis et naturel dans les traductions. Adapte les onomatopees au francais.`;
 
 function setCorsHeaders(res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -143,72 +84,6 @@ function normalizeText(text) {
     .replace(/\s+/g, ' ')
     .replace(/\s([?.!,;:])/g, '$1')
     .trim();
-}
-
-function buildOcrPrompt(context) {
-  if (!context) {
-    return OCR_PROMPT;
-  }
-
-  const lines = [];
-
-  if (context.pageTitle) {
-    lines.push(`Titre de page: ${context.pageTitle}`);
-  }
-
-  if (Number.isFinite(context.currentImageIndex) && Number.isFinite(context.totalImages)) {
-    lines.push(`Image courante: ${context.currentImageIndex + 1}/${context.totalImages}`);
-  }
-
-  if (Array.isArray(context.recentBlocks) && context.recentBlocks.length > 0) {
-    lines.push('Contexte recent de la page:');
-    context.recentBlocks.forEach((block, index) => {
-      lines.push(
-        `${index + 1}. [${block.type || 'dialogue'} | ${block.tone || 'neutral'}] ` +
-        `EN="${block.original || ''}" | FR="${block.translated || ''}"`
-      );
-    });
-  }
-
-  if (Array.isArray(context.glossary) && context.glossary.length > 0) {
-    lines.push('Glossaire deja stabilise:');
-    context.glossary.forEach((entry, index) => {
-      lines.push(`${index + 1}. EN="${entry.original}" => FR="${entry.translated}"`);
-    });
-  }
-
-  if (context.chapterSummary?.dominantTones?.length) {
-    lines.push(`Voix dominante du chapitre: ${context.chapterSummary.dominantTones.join(', ')}`);
-  }
-
-  return lines.length > 0
-    ? `${OCR_PROMPT}\n\nContexte supplementaire:\n${lines.join('\n')}`
-    : OCR_PROMPT;
-}
-
-function buildTranslationPrompt(text, context) {
-  const lines = [
-    'Traduis le texte anglais suivant en francais naturel pour un manga ou un manhwa.',
-    'Reste fidele au ton, au registre, a la situation et a la voix de l auteur.',
-    'Reponds uniquement avec la traduction finale, sans guillemets.',
-    `Texte: ${text}`
-  ];
-
-  if (Array.isArray(context?.recentBlocks) && context.recentBlocks.length > 0) {
-    lines.push('Contexte recent:');
-    context.recentBlocks.slice(-6).forEach((block, index) => {
-      lines.push(`${index + 1}. EN="${block.original}" | FR="${block.translated}"`);
-    });
-  }
-
-  if (Array.isArray(context?.glossary) && context.glossary.length > 0) {
-    lines.push('Glossaire a respecter:');
-    context.glossary.slice(0, 8).forEach(entry => {
-      lines.push(`- ${entry.original} => ${entry.translated}`);
-    });
-  }
-
-  return lines.join('\n');
 }
 
 function normalizeBBox(rawBBox) {
@@ -253,102 +128,6 @@ function normalizeStyle(rawStyle) {
   }
 
   return Object.keys(style).length > 0 ? style : null;
-}
-
-function decodeJsonString(value) {
-  if (typeof value !== 'string') {
-    return '';
-  }
-
-  try {
-    return JSON.parse(`"${value}"`);
-  } catch {
-    return value
-      .replace(/\\"/g, '"')
-      .replace(/\\n/g, ' ')
-      .replace(/\\r/g, ' ')
-      .replace(/\\t/g, ' ')
-      .replace(/\s+/g, ' ')
-      .trim();
-  }
-}
-
-function parseLooseStyle(rawStyleText) {
-  if (!rawStyleText) return null;
-
-  const italicMatch = rawStyleText.match(/"italic"\s*:\s*(true|false)/);
-  return normalizeStyle({
-    align: rawStyleText.match(/"align"\s*:\s*"([^"]+)"/)?.[1],
-    lettering: rawStyleText.match(/"lettering"\s*:\s*"([^"]+)"/)?.[1],
-    emphasis: rawStyleText.match(/"emphasis"\s*:\s*"([^"]+)"/)?.[1],
-    casing: rawStyleText.match(/"casing"\s*:\s*"([^"]+)"/)?.[1],
-    italic: italicMatch ? italicMatch[1] === 'true' : undefined,
-    weight: rawStyleText.match(/"weight"\s*:\s*(\d+)/)?.[1]
-  });
-}
-
-function parseLooseBlocks(raw) {
-  const blockStarts = [...raw.matchAll(/"original"\s*:/g)].map(match => match.index);
-  if (blockStarts.length === 0) {
-    return [];
-  }
-
-  const blocks = [];
-  for (let index = 0; index < blockStarts.length; index++) {
-    const start = blockStarts[index];
-    const end = blockStarts[index + 1] ?? raw.length;
-    const segment = raw.slice(start, end);
-    const originalMatch = segment.match(/"original"\s*:\s*"((?:\\.|[^"\\])*)"/s);
-    const translatedMatch = segment.match(/"translated"\s*:\s*"((?:\\.|[^"\\])*)"/s);
-    if (!originalMatch || !translatedMatch) {
-      continue;
-    }
-
-    const bboxMatch = segment.match(
-      /"bbox"\s*:\s*\{[\s\S]*?"x"\s*:\s*([-+]?\d*\.?\d+(?:[eE][-+]?\d+)?)\s*,[\s\S]*?"y"\s*:\s*([-+]?\d*\.?\d+(?:[eE][-+]?\d+)?)\s*,[\s\S]*?"width"\s*:\s*([-+]?\d*\.?\d+(?:[eE][-+]?\d+)?)\s*,[\s\S]*?"height"\s*:\s*([-+]?\d*\.?\d+(?:[eE][-+]?\d+)?)/s
-    );
-    const styleMatch = segment.match(/"style"\s*:\s*\{([\s\S]*?)\}/s);
-
-    blocks.push({
-      original: decodeJsonString(originalMatch[1]),
-      translated: decodeJsonString(translatedMatch[1]),
-      type: segment.match(/"type"\s*:\s*"([^"]+)"/)?.[1] || 'dialogue',
-      bbox: bboxMatch
-        ? normalizeBBox({
-            x: bboxMatch[1],
-            y: bboxMatch[2],
-            width: bboxMatch[3],
-            height: bboxMatch[4]
-          })
-        : null,
-      tone: segment.match(/"tone"\s*:\s*"([^"]+)"/)?.[1] || 'neutral',
-      style: parseLooseStyle(styleMatch?.[1] || '')
-    });
-  }
-
-  return blocks.filter(block => block.original && block.translated);
-}
-
-function parseAiResponse(raw) {
-  const cleaned = String(raw || '').trim()
-    .replace(/^```(?:json)?\s*/i, '')
-    .replace(/\s*```$/i, '');
-
-  try {
-    const parsed = JSON.parse(cleaned);
-    if (Array.isArray(parsed.blocks)) {
-      return parsed.blocks
-        .map(normalizeIncomingBlock)
-        .filter(Boolean);
-    }
-  } catch {
-    const recovered = parseLooseBlocks(raw);
-    if (recovered.length > 0) {
-      return recovered.map(normalizeIncomingBlock).filter(Boolean);
-    }
-  }
-
-  return parseLooseBlocks(raw).map(normalizeIncomingBlock).filter(Boolean);
 }
 
 function normalizeIncomingBlock(block) {
@@ -684,188 +463,46 @@ function getOcrServiceHealthSnapshot() {
   };
 }
 
-async function translateWithGemini(text, context) {
-  if (!config.geminiApiKey) {
-    return null;
-  }
-
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${config.geminiModel}:generateContent?key=${config.geminiApiKey}`;
-  const response = await fetchJsonWithTimeout(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      contents: [{
-        parts: [{ text: buildTranslationPrompt(text, context) }]
-      }],
-      generationConfig: {
-        temperature: 0.1,
-        maxOutputTokens: 256
-      }
-    })
-  }, 12000);
-
-  if (!response.ok) {
-    throw new Error(`Gemini translation ${response.status}`);
-  }
-
-  const data = await response.json();
-  return normalizeText(data.candidates?.[0]?.content?.parts?.[0]?.text || '');
-}
-
-async function translateWithOpenAI(text, context) {
-  if (!config.openaiApiKey) {
-    return null;
-  }
-
-  const response = await fetchJsonWithTimeout('https://api.openai.com/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${config.openaiApiKey}`
-    },
-    body: JSON.stringify({
-      model: config.openaiTextModel,
-      messages: [{
-        role: 'user',
-        content: buildTranslationPrompt(text, context)
-      }],
-      temperature: 0.1,
-      max_tokens: 256
-    })
-  }, 12000);
-
-  if (!response.ok) {
-    throw new Error(`OpenAI translation ${response.status}`);
-  }
-
-  const data = await response.json();
-  return normalizeText(data.choices?.[0]?.message?.content || '');
-}
-
-async function translateWithLibre(text) {
-  if (!config.enablePublicTranslationFallback) {
-    return null;
-  }
-
-  for (const endpoint of LIBRE_TRANSLATE_ENDPOINTS) {
-    try {
-      const response = await fetchJsonWithTimeout(endpoint, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept': 'application/json'
-        },
-        body: JSON.stringify({
-          q: text,
-          source: 'en',
-          target: 'fr',
-          format: 'text'
-        })
-      }, 8000);
-
-      if (!response.ok) {
-        continue;
-      }
-
-      const data = await response.json();
-      if (data?.translatedText && data.translatedText !== text) {
-        return normalizeText(data.translatedText);
-      }
-    } catch {
-      continue;
-    }
-  }
-
-  return null;
-}
-
-async function translateWithMyMemory(text) {
-  if (!config.enablePublicTranslationFallback) {
-    return null;
-  }
-
+async function translateWithArgos(text) {
+  if (!config.ocrServiceUrl) return null;
   try {
-    const encoded = encodeURIComponent(text);
-    const response = await fetchJsonWithTimeout(
-      `https://api.mymemory.translated.net/get?q=${encoded}&langpair=en|fr`,
-      {
-        headers: { 'Accept': 'application/json' }
-      },
-      8000
-    );
-
-    if (!response.ok) {
-      return null;
-    }
-
-    const data = await response.json();
-    if (data?.responseStatus === 200 && data.responseData?.translatedText) {
-      return normalizeText(data.responseData.translatedText);
-    }
+    const payload = await fetchOcrService('/translate/argos', { text, source: 'en', target: 'fr' });
+    return normalizeText(payload?.translation || '');
   } catch {
     return null;
   }
+}
+
+async function translateText(text) {
+  const normalized = normalizeText(text);
+  if (!normalized) return null;
+
+  const common = translateCommonTerms(normalized);
+  if (common) return common;
+
+  const localTranslation = await translateWithLocalModel(normalized, 'en', 'fr');
+  if (localTranslation) return localTranslation;
+
+  const argosTranslation = await translateWithArgos(normalized);
+  if (argosTranslation) return argosTranslation;
 
   return null;
 }
 
-async function translateText(text, context) {
+async function translateTextCached(text) {
   const normalized = normalizeText(text);
-  if (!normalized) {
-    return null;
-  }
-
-  const common = translateCommonTerms(normalized);
-  if (common) {
-    return common;
-  }
-
-  const localTranslation = await translateWithLocalModel(normalized, 'en', 'fr');
-  if (localTranslation) {
-    return localTranslation;
-  }
-
-  if (config.openaiApiKey) {
-    try {
-      const translated = await translateWithOpenAI(normalized, context);
-      if (translated) return translated;
-    } catch {}
-  }
-
-  if (config.geminiApiKey) {
-    try {
-      const translated = await translateWithGemini(normalized, context);
-      if (translated) return translated;
-    } catch {}
-  }
-
-  return (
-    await translateWithMyMemory(normalized) ||
-    await translateWithLibre(normalized) ||
-    null
-  );
-}
-
-async function translateTextCached(text, context) {
-  const normalized = normalizeText(text);
-  if (!normalized) {
-    return null;
-  }
+  if (!normalized) return null;
 
   const cacheKey = getTranslationCacheKey(normalized);
   const cached = getCachedTranslation(cacheKey);
-  if (cached) {
-    return cached;
-  }
+  if (cached) return cached;
 
-  const translated = await translateText(normalized, context);
-  if (translated) {
-    setCachedTranslation(cacheKey, translated);
-  }
+  const translated = await translateText(normalized);
+  if (translated) setCachedTranslation(cacheKey, translated);
   return translated;
 }
 
-async function ensureTranslatedBlocks(blocks, context) {
+async function ensureTranslatedBlocks(blocks) {
   const orderedBlocks = normalizeBlockList(blocks);
   const uniqueTexts = [...new Set(
     orderedBlocks
@@ -873,42 +510,36 @@ async function ensureTranslatedBlocks(blocks, context) {
       .map(block => normalizeText(block.original))
       .filter(Boolean)
   )];
+
+  if (uniqueTexts.length === 0) return orderedBlocks;
+
   const translationMap = new Map();
   const missingTexts = [];
 
   uniqueTexts.forEach(text => {
     const common = translateCommonTerms(text);
-    if (common) {
-      translationMap.set(text, common);
-      return;
-    }
-
+    if (common) { translationMap.set(text, common); return; }
     const cached = getCachedTranslation(getTranslationCacheKey(text));
-    if (cached) {
-      translationMap.set(text, cached);
-      return;
-    }
-
+    if (cached) { translationMap.set(text, cached); return; }
     missingTexts.push(text);
   });
 
-  const localTranslations = await translateManyWithLocalModel(missingTexts, 'en', 'fr');
-  for (const text of missingTexts) {
-    const translated = localTranslations.get(text);
-    if (translated) {
-      translationMap.set(text, translated);
-      setCachedTranslation(getTranslationCacheKey(text), translated);
+  if (missingTexts.length > 0) {
+    const localTranslations = await translateManyWithLocalModel(missingTexts, 'en', 'fr');
+    for (const text of missingTexts) {
+      const translated = localTranslations.get(text);
+      if (translated) {
+        translationMap.set(text, translated);
+        setCachedTranslation(getTranslationCacheKey(text), translated);
+      }
+    }
+
+    const stillMissing = missingTexts.filter(text => !translationMap.has(text));
+    for (const text of stillMissing) {
+      const translated = await translateTextCached(text);
+      if (translated) translationMap.set(text, translated);
     }
   }
-
-  const unresolvedTexts = missingTexts.filter(text => !translationMap.has(text));
-  await Promise.all(unresolvedTexts.map(async text => {
-    const translated = await translateText(text, context);
-    if (translated) {
-      translationMap.set(text, translated);
-      setCachedTranslation(getTranslationCacheKey(text), translated);
-    }
-  }));
 
   return orderedBlocks.map(block => {
     const nextBlock = { ...block };
@@ -918,9 +549,7 @@ async function ensureTranslatedBlocks(blocks, context) {
         nextBlock.translated ||
         nextBlock.original;
     }
-    if (!nextBlock.translated) {
-      nextBlock.translated = nextBlock.original;
-    }
+    if (!nextBlock.translated) nextBlock.translated = nextBlock.original;
     return nextBlock;
   });
 }
@@ -949,306 +578,39 @@ async function ocrWithLocalPipeline(image, ocrEngine, context) {
   };
 }
 
-async function ocrWithGemini(image, context) {
-  if (!config.geminiApiKey) {
-    return null;
-  }
-
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${config.geminiModel}:generateContent?key=${config.geminiApiKey}`;
-  const response = await fetchJsonWithTimeout(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      contents: [{
-        parts: [
-          { text: buildOcrPrompt(context) },
-          {
-            inline_data: {
-              mime_type: image.mimeType,
-              data: image.base64
-            }
-          }
-        ]
-      }],
-      generationConfig: {
-        temperature: 0.1,
-        maxOutputTokens: 4096
-      }
-    })
-  }, 60000);
-
-  if (!response.ok) {
-    const errBody = await response.text().catch(() => '');
-    throw new Error(`Gemini OCR ${response.status}: ${errBody.slice(0, 200)}`);
-  }
-
-  const data = await response.json();
-  const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
-  const parsed = parseAiResponse(rawText);
-  console.log(`[OCR][Gemini] Raw response length=${rawText.length}, parsed blocks before normalize=${parsed.length}`);
-  if (parsed.length > 0 && parsed.length <= 3) {
-    console.log(`[OCR][Gemini] Sample block:`, JSON.stringify(parsed[0]).slice(0, 300));
-  }
-  const normalized = normalizeBlockList(parsed);
-  console.log(`[OCR][Gemini] After normalizeBlockList: ${normalized.length} bloc(s)`);
-  if (parsed.length > 0 && normalized.length === 0) {
-    console.warn(`[OCR][Gemini] Tous les blocs filtrés! Exemple brut:`, JSON.stringify(parsed[0]).slice(0, 400));
-  }
-  return normalized;
-}
-
-async function ocrWithOpenAI(image, context) {
-  if (!config.openaiApiKey) {
-    return null;
-  }
-
-  const maxRetries = 2;
-  let lastError = null;
-
-  for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    if (attempt > 0) {
-      const delay = 1000 * Math.pow(2, attempt - 1);
-      console.log(`[OCR][OpenAI] Retry ${attempt}/${maxRetries} après ${delay}ms`);
-      await new Promise(r => setTimeout(r, delay));
-    }
-
-    const response = await fetchJsonWithTimeout('https://api.openai.com/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${config.openaiApiKey}`
-      },
-      body: JSON.stringify({
-        model: config.openaiVisionModel,
-        messages: [{
-          role: 'user',
-          content: [
-            { type: 'text', text: buildOcrPrompt(context) },
-            {
-              type: 'image_url',
-              image_url: {
-                url: `data:${image.mimeType};base64,${image.base64}`,
-                detail: 'high'
-              }
-            }
-          ]
-        }],
-        temperature: 0.1,
-        max_tokens: 4096
-      })
-    }, 60000);
-
-    if (response.status === 429 && attempt < maxRetries) {
-      lastError = new Error('OpenAI OCR 429 rate limited');
-      continue;
-    }
-
-    if (!response.ok) {
-      throw new Error(`OpenAI OCR ${response.status}`);
-    }
-
-    const data = await response.json();
-    const rawText = data.choices?.[0]?.message?.content || '';
-    const parsed = parseAiResponse(rawText);
-    console.log(`[OCR][OpenAI] Raw response length=${rawText.length}, parsed=${parsed.length}`);
-    return normalizeBlockList(parsed);
-  }
-
-  throw lastError || new Error('OpenAI OCR exhausted retries');
-}
-
-function scoreOcrResult(result) {
-  if (!result || !result.blocks || result.blocks.length === 0) return 0;
-  const blocks = result.blocks;
-  const blockCount = blocks.length;
-  const hasBbox = blocks.filter(b => b.bbox && b.bbox.width > 0).length;
-  const hasTranslation = blocks.filter(b => b.translated && b.translated.trim()).length;
-  const avgConfidence = result.quality?.meanConfidence ?? 0.5;
-  return (
-    Math.min(blockCount, 20) * 3 +
-    hasBbox * 2 +
-    hasTranslation * 2 +
-    avgConfidence * 10 +
-    (result.quality?.needsVisionFallback ? -15 : 0)
-  );
-}
-
-function mergeOcrResults(primary, secondary) {
-  if (!secondary || !secondary.blocks || secondary.blocks.length === 0) return primary;
-  if (!primary || !primary.blocks || primary.blocks.length === 0) return secondary;
-
-  const primaryBboxes = primary.blocks
-    .filter(b => b.bbox)
-    .map(b => ({ cx: b.bbox.x + b.bbox.width / 2, cy: b.bbox.y + b.bbox.height / 2 }));
-
-  const merged = [...primary.blocks];
-  for (const block of secondary.blocks) {
-    if (!block.bbox) continue;
-    const cx = block.bbox.x + block.bbox.width / 2;
-    const cy = block.bbox.y + block.bbox.height / 2;
-    const isDuplicate = primaryBboxes.some(
-      p => Math.abs(p.cx - cx) < 0.08 && Math.abs(p.cy - cy) < 0.08
-    );
-    if (!isDuplicate) {
-      merged.push(block);
-    }
-  }
-
-  return {
-    engine: `${primary.engine}+${secondary.engine}`,
-    blocks: merged,
-    quality: primary.quality,
-    diagnostics: {
-      ...(primary.diagnostics || {}),
-      mergedFrom: secondary.engine,
-      mergedBlocks: secondary.blocks.length
-    }
-  };
-}
-
 async function runAiOcr(image, ocrEngine, context) {
   const normalizedEngine = typeof ocrEngine === 'string' ? ocrEngine.trim() : '';
   const requestedEngine = SUPPORTED_OCR_ENGINE_IDS.has(normalizedEngine) ? normalizedEngine : 'auto';
-  const hasLocalPipeline = LOCAL_OCR_ENGINES.has(requestedEngine) && !!config.ocrServiceUrl;
-  const hasGemini = !!config.geminiApiKey;
-  const hasOpenAI = !!config.openaiApiKey;
-  const hasVisionProvider = hasGemini || hasOpenAI;
   const log = (...args) => console.log('[OCR]', ...args);
 
-  log(`Requête OCR engine=${requestedEngine} local=${hasLocalPipeline} gemini=${hasGemini} openai=${hasOpenAI}`);
-
-  // Explicit engine request (not auto) — route directly
-  if (requestedEngine === 'gemini') {
-    if (!hasGemini) throw Object.assign(new Error('Clé Gemini non configurée'), { statusCode: 503 });
-    log('Route directe → Gemini Vision');
-    const blocks = normalizeBlockList(await ocrWithGemini(image, context));
-    return { engine: 'Gemini', blocks: await ensureTranslatedBlocks(blocks, context) };
-  }
-  if (requestedEngine === 'openai') {
-    if (!hasOpenAI) throw Object.assign(new Error('Clé OpenAI non configurée'), { statusCode: 503 });
-    log('Route directe → OpenAI Vision');
-    const blocks = normalizeBlockList(await ocrWithOpenAI(image, context));
-    return { engine: 'OpenAI', blocks: await ensureTranslatedBlocks(blocks, context) };
-  }
-
-  // No provider at all
-  if (!hasLocalPipeline && !hasVisionProvider) {
+  if (!config.ocrServiceUrl) {
     const error = new Error(
-      'Aucun moteur OCR backend configure. ' +
-      'Verifiez: (1) OCR_PIPELINE_URL dans .env + pipeline Python demarré, ' +
-      'ou (2) GEMINI_API_KEY / OPENAI_API_KEY dans backend/.env'
+      'Pipeline OCR non configuré. Vérifiez OCR_PIPELINE_URL dans .env et démarrez le pipeline Python.'
     );
     error.statusCode = 503;
     throw error;
   }
 
-  // --- Smart strategy for auto / manga-stack / paddle / doctr / mangaocr ---
-  let localResult = null;
-  let localScore = 0;
+  log(`Requête OCR engine=${requestedEngine} pipeline=${config.ocrServiceUrl}`);
 
-  // Phase 1: Try local pipeline (free, fast)
-  if (hasLocalPipeline) {
-    try {
-      const t0 = Date.now();
-      localResult = await ocrWithLocalPipeline(image, requestedEngine, context);
-      const elapsed = Date.now() - t0;
-      if (localResult && localResult.blocks.length > 0) {
-        localScore = scoreOcrResult(localResult);
-        log(`Local pipeline → ${localResult.blocks.length} bloc(s), score=${localScore}, ${elapsed}ms`);
-      } else {
-        log(`Local pipeline → 0 blocs, ${elapsed}ms`);
-      }
-    } catch (err) {
-      log(`Local pipeline erreur: ${err.message}`);
-    }
-  }
+  const t0 = Date.now();
+  try {
+    const result = await ocrWithLocalPipeline(image, requestedEngine, context);
+    const elapsed = Date.now() - t0;
 
-  // Phase 2: Decide if we need vision escalation
-  const LOCAL_GOOD_THRESHOLD = 30;
-  const LOCAL_SUFFICIENT_THRESHOLD = 15;
-  const needsVisionEscalation = localScore < LOCAL_GOOD_THRESHOLD && hasVisionProvider;
-  const localIsSufficient = localScore >= LOCAL_SUFFICIENT_THRESHOLD;
-
-  if (localScore >= LOCAL_GOOD_THRESHOLD) {
-    log(`Score local ${localScore} >= ${LOCAL_GOOD_THRESHOLD} → résultat accepté sans escalade`);
-    const blocks = await ensureTranslatedBlocks(localResult.blocks, context);
-    return { ...localResult, blocks };
-  }
-
-  // Phase 3: Vision escalation (parallel Gemini + OpenAI when both available)
-  let visionResult = null;
-
-  if (needsVisionEscalation) {
-    log(`Score local ${localScore} < ${LOCAL_GOOD_THRESHOLD} → escalade vision`);
-
-    const visionProviders = [];
-    if (hasGemini) visionProviders.push(['Gemini', () => ocrWithGemini(image, context)]);
-    if (hasOpenAI) visionProviders.push(['OpenAI', () => ocrWithOpenAI(image, context)]);
-
-    // Run vision providers in parallel for speed
-    const visionResults = await Promise.allSettled(
-      visionProviders.map(async ([name, run]) => {
-        const t0 = Date.now();
-        try {
-          const blocks = normalizeBlockList(await run());
-          const elapsed = Date.now() - t0;
-          log(`${name} Vision → ${blocks.length} bloc(s), ${elapsed}ms`);
-          return { engine: name, blocks, elapsed };
-        } catch (err) {
-          log(`${name} Vision erreur: ${err.message} (${Date.now() - t0}ms)`);
-          throw err;
-        }
-      })
-    );
-
-    // Pick best vision result
-    let bestVisionScore = 0;
-    for (const settled of visionResults) {
-      if (settled.status !== 'fulfilled' || !settled.value.blocks.length) continue;
-      const candidate = settled.value;
-      const score = scoreOcrResult(candidate);
-      if (score > bestVisionScore) {
-        bestVisionScore = score;
-        visionResult = candidate;
-      }
+    if (result && result.blocks.length > 0) {
+      log(`Pipeline → ${result.blocks.length} bloc(s), ${elapsed}ms`);
+      // Le pipeline auto-traduit maintenant, mais on s'assure que tout est traduit
+      const blocks = await ensureTranslatedBlocks(result.blocks);
+      return { ...result, blocks };
     }
 
-    if (visionResult) {
-      log(`Meilleur vision: ${visionResult.engine} score=${bestVisionScore}`);
-    }
+    log(`Pipeline → 0 blocs, ${elapsed}ms`);
+    return { engine: 'pipeline', blocks: [], diagnostics: result?.diagnostics || {} };
+  } catch (err) {
+    log(`Pipeline erreur: ${err.message} (${Date.now() - t0}ms)`);
+    throw Object.assign(new Error(`Pipeline OCR indisponible: ${err.message}`), { statusCode: 503 });
   }
-
-  // Phase 4: Combine results
-  if (visionResult && visionResult.blocks.length > 0) {
-    if (localIsSufficient && localResult) {
-      // Merge local bbox precision + vision translation quality
-      const merged = mergeOcrResults(
-        { engine: visionResult.engine, blocks: visionResult.blocks, quality: localResult.quality, diagnostics: localResult.diagnostics },
-        localResult
-      );
-      log(`Merge ${visionResult.engine} + local → ${merged.blocks.length} bloc(s)`);
-      return { ...merged, blocks: await ensureTranslatedBlocks(merged.blocks, context) };
-    }
-
-    log(`Vision seule → ${visionResult.engine} (${visionResult.blocks.length} blocs)`);
-    return {
-      engine: visionResult.engine,
-      blocks: await ensureTranslatedBlocks(visionResult.blocks, context),
-      diagnostics: { escalatedFrom: 'local', reason: localResult ? 'low-quality' : 'no-local-blocks' }
-    };
-  }
-
-  // Phase 5: Fallback to local if vision failed but local had something
-  if (localResult && localResult.blocks.length > 0) {
-    log(`Fallback local (vision indisponible/échouée) → ${localResult.blocks.length} bloc(s)`);
-    return {
-      ...localResult,
-      blocks: await ensureTranslatedBlocks(localResult.blocks, context)
-    };
-  }
-
-  log('Aucun provider n\'a retourné de blocs exploitables');
-  return { engine: 'backend', blocks: [], diagnostics: { localScore, hasLocalPipeline, hasGemini, hasOpenAI } };
 }
 
 async function handleTranslate(req, res, body) {
@@ -1261,7 +623,7 @@ async function handleTranslate(req, res, body) {
     return sendJson(res, 400, { error: 'Missing text' });
   }
 
-  const translation = await translateTextCached(text, body?.context || null);
+  const translation = await translateTextCached(text);
   return sendJson(res, 200, { translation });
 }
 
@@ -1300,7 +662,7 @@ async function handleBatchTranslate(req, res, body) {
     return sendJson(res, 400, { error: 'Batch size exceeds limit of 50' });
   }
 
-  const tasks = texts.map(text => () => translateTextCached(normalizeText(text), context));
+  const tasks = texts.map(text => () => translateTextCached(normalizeText(text)));
   const results = await runWithConcurrency(tasks, 5);
 
   return sendJson(res, 200, { translations: results });
@@ -1327,18 +689,12 @@ function handleHealth(res) {
   const ocrPipeline = getOcrServiceHealthSnapshot();
   return sendJson(res, 200, {
     ok: true,
-    userApiKeysRequired: false,
+    mode: 'local-only',
     policy: {
-      ocrPrimary: 'local-manga-stack',
-      visionFallback: ['gemini', 'openai'],
-      translation: 'server-managed'
+      ocr: 'PaddleOCR + doctr + manga-ocr (local pipeline)',
+      translation: 'Helsinki-NLP/opus-mt-en-fr + Argostranslate (local)'
     },
-    providers: {
-      gemini: !!config.geminiApiKey,
-      openai: !!config.openaiApiKey
-    },
-    ocrPipeline,
-    publicTranslationFallback: config.enablePublicTranslationFallback
+    ocrPipeline
   });
 }
 

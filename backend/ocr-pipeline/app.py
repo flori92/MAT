@@ -1191,12 +1191,77 @@ def execute_plan(image: Image.Image, requested_engine: str) -> dict[str, Any]:
     }
 
 
+def argos_available() -> bool:
+    try:
+        from argostranslate import translate as argos_translate
+        langs = argos_translate.get_installed_languages()
+        en = next((l for l in langs if l.code == "en"), None)
+        fr = next((l for l in langs if l.code == "fr"), None)
+        return en is not None and fr is not None
+    except Exception:
+        return False
+
+
+def get_argos_translator():
+    from argostranslate import translate as argos_translate
+    langs = argos_translate.get_installed_languages()
+    en = next(l for l in langs if l.code == "en")
+    fr = next(l for l in langs if l.code == "fr")
+    return en.get_translation(fr)
+
+
+def translate_text_argos(text: str) -> str | None:
+    normalized = normalize_text(text)
+    if not normalized:
+        return None
+    try:
+        translator = get_engine("argos_en_fr", get_argos_translator)
+        result = translator.translate(normalized)
+        return normalize_text(result) or None
+    except Exception:
+        return None
+
+
+def translate_texts_argos(texts: list[str]) -> list[str | None]:
+    results: list[str | None] = []
+    for text in texts:
+        results.append(translate_text_argos(text))
+    return results
+
+
+def translate_blocks(blocks: list[dict[str, Any]], source: str = "en", target: str = "fr") -> list[dict[str, Any]]:
+    """Translate all blocks using the best available translation engine."""
+    texts_to_translate = [block.get("original") or block.get("text") or "" for block in blocks]
+    if not any(texts_to_translate):
+        return blocks
+
+    # Try local Helsinki model first, then Argos
+    translations: list[str | None] = [None] * len(texts_to_translate)
+    if can_translate_locally(source, target):
+        translations = translate_texts_local(texts_to_translate, source, target)
+
+    # Fill gaps with Argos
+    if argos_available():
+        for i, (text, tr) in enumerate(zip(texts_to_translate, translations)):
+            if not tr and text:
+                translations[i] = translate_text_argos(text)
+
+    translated_blocks = []
+    for block, tr in zip(blocks, translations):
+        translated_blocks.append({
+            **block,
+            "translated": tr or block.get("translated") or "",
+        })
+    return translated_blocks
+
+
 def available_engines() -> dict[str, bool]:
     return {
         "paddle": module_available("paddleocr"),
         "mangaocr": module_available("manga_ocr"),
         "doctr": module_available("doctr"),
         "translator": module_available("transformers") and module_available("sentencepiece"),
+        "argos": argos_available(),
     }
 
 
@@ -1277,6 +1342,12 @@ def warmup_engines() -> None:
     except Exception:
         pass
 
+    try:
+        if argos_available():
+            get_engine("argos_en_fr", get_argos_translator)
+    except Exception:
+        pass
+
 
 @app.on_event("startup")
 def schedule_warmup() -> None:
@@ -1285,13 +1356,15 @@ def schedule_warmup() -> None:
 
 @app.get("/health")
 def health() -> dict[str, Any]:
+    engines = available_engines()
     return {
         "ok": True,
-        "engines": available_engines(),
+        "engines": engines,
         "recommended": "manga-stack",
         "translation": {
             "localModel": get_local_translation_model_name(),
-            "localAvailable": available_engines()["translator"],
+            "localAvailable": engines["translator"],
+            "argosAvailable": engines["argos"],
         },
     }
 
@@ -1330,12 +1403,37 @@ def translate_local_batch(payload: BatchTranslateRequest) -> dict[str, Any]:
     }
 
 
+@app.post("/translate/argos")
+def translate_argos(payload: TranslateRequest) -> dict[str, Any]:
+    translated = translate_text_argos(payload.text)
+    if not translated:
+        raise HTTPException(status_code=503, detail="Argos translation unavailable")
+    return {
+        "translation": translated,
+        "engine": "argos",
+    }
+
+
+@app.post("/translate/argos-batch")
+def translate_argos_batch(payload: BatchTranslateRequest) -> dict[str, Any]:
+    translations = translate_texts_argos(payload.texts or [])
+    if not any(translations):
+        raise HTTPException(status_code=503, detail="Argos translation unavailable")
+    return {
+        "translations": translations,
+        "engine": "argos",
+    }
+
+
 @app.post("/ocr/manga")
 def ocr_manga(payload: OcrRequest) -> dict[str, Any]:
     image = decode_image(payload.image)
     result = execute_plan(image, payload.ocrEngine)
+    target_lang = (payload.context or {}).get("targetLang", "fr")
+    source_lang = (payload.context or {}).get("sourceLang", "en")
+    blocks = translate_blocks(result["blocks"], source_lang, target_lang)
     return {
         "engine": result["engine"],
-        "blocks": result["blocks"],
+        "blocks": blocks,
         "diagnostics": result["diagnostics"],
     }
