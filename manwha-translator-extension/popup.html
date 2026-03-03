@@ -5,6 +5,20 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Manwha Auto Translator</title>
   <style>
+    :root {
+      --bg: #0f141a;
+      --panel: #171d24;
+      --panel-strong: #1d2530;
+      --border: #2a3441;
+      --text: #edf1f5;
+      --muted: #93a0af;
+      --accent: #d85c1a;
+      --accent-hover: #bf4f15;
+      --accent-soft: rgba(216, 92, 26, 0.12);
+      --success: #2f9e5a;
+      --danger: #d9534f;
+    }
+
     * {
       margin: 0;
       padding: 0;
@@ -14,42 +28,66 @@
     body {
       width: 350px;
       min-height: 400px;
-      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-      background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
-      color: #fff;
+      font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+      background: var(--bg);
+      color: var(--text);
       padding: 20px;
     }
     
     .header {
-      text-align: center;
       margin-bottom: 20px;
+    }
+
+    .header-brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 14px 16px;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+    }
+
+    .header-logo {
+      width: 46px;
+      height: 46px;
+      object-fit: cover;
+      border-radius: 12px;
+      flex: 0 0 auto;
+      box-shadow: 0 8px 18px rgba(0, 0, 0, 0.28);
     }
     
     .header h1 {
       font-size: 20px;
-      background: linear-gradient(90deg, #00d4ff, #7b2cbf);
-      -webkit-background-clip: text;
-      -webkit-text-fill-color: transparent;
-      background-clip: text;
+      line-height: 1.1;
+      color: var(--text);
+      letter-spacing: 0.02em;
     }
     
     .header p {
       font-size: 12px;
-      color: #888;
-      margin-top: 5px;
+      color: var(--muted);
+      margin-top: 4px;
+    }
+
+    .header-copy {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+      text-align: left;
     }
     
     .status-card {
-      background: rgba(255,255,255,0.05);
+      background: var(--panel);
       border-radius: 12px;
       padding: 15px;
       margin-bottom: 15px;
-      border: 1px solid rgba(255,255,255,0.1);
+      border: 1px solid var(--border);
     }
     
     .status-title {
       font-size: 12px;
-      color: #888;
+      color: var(--muted);
       text-transform: uppercase;
       letter-spacing: 1px;
       margin-bottom: 8px;
@@ -66,12 +104,12 @@
       width: 8px;
       height: 8px;
       border-radius: 50%;
-      background: #28a745;
+      background: var(--success);
       animation: pulse 2s infinite;
     }
     
     .status-dot.inactive {
-      background: #dc3545;
+      background: var(--danger);
       animation: none;
     }
     
@@ -102,23 +140,24 @@
     }
     
     .btn-primary {
-      background: linear-gradient(90deg, #00d4ff, #7b2cbf);
-      color: white;
+      background: var(--accent);
+      color: #fff;
+      border: 1px solid #b24c17;
     }
     
     .btn-primary:hover {
-      transform: translateY(-2px);
-      box-shadow: 0 5px 20px rgba(0, 212, 255, 0.3);
+      background: var(--accent-hover);
+      box-shadow: 0 5px 16px rgba(0, 0, 0, 0.2);
     }
     
     .btn-secondary {
-      background: rgba(255,255,255,0.1);
-      color: white;
-      border: 1px solid rgba(255,255,255,0.2);
+      background: var(--panel-strong);
+      color: var(--text);
+      border: 1px solid var(--border);
     }
     
     .btn-secondary:hover {
-      background: rgba(255,255,255,0.15);
+      background: #232c37;
     }
     
     .btn:disabled {
@@ -128,10 +167,10 @@
     }
     
     .settings {
-      background: rgba(255,255,255,0.03);
+      background: var(--panel);
       border-radius: 12px;
       padding: 15px;
-      border: 1px solid rgba(255,255,255,0.1);
+      border: 1px solid var(--border);
     }
     
     .setting-item {
@@ -147,21 +186,21 @@
     
     .setting-label {
       font-size: 13px;
-      color: #ccc;
+      color: #c7d0da;
     }
     
     .toggle {
       position: relative;
       width: 44px;
       height: 24px;
-      background: #444;
+      background: #46505c;
       border-radius: 12px;
       cursor: pointer;
       transition: background 0.3s;
     }
     
     .toggle.active {
-      background: linear-gradient(90deg, #00d4ff, #7b2cbf);
+      background: var(--accent);
     }
     
     .toggle::after {
@@ -181,9 +220,9 @@
     }
     
     select {
-      background: rgba(255,255,255,0.1);
-      border: 1px solid rgba(255,255,255,0.2);
-      color: white;
+      background: var(--panel-strong);
+      border: 1px solid var(--border);
+      color: var(--text);
       padding: 6px 12px;
       border-radius: 6px;
       font-size: 12px;
@@ -191,22 +230,22 @@
     }
     
     select option {
-      background: #1a1a2e;
+      background: #11161c;
     }
     
     .stats {
       margin-top: 15px;
       padding-top: 15px;
-      border-top: 1px solid rgba(255,255,255,0.1);
+      border-top: 1px solid var(--border);
       font-size: 11px;
-      color: #666;
+      color: var(--muted);
       text-align: center;
     }
     
     .progress-bar {
       width: 100%;
       height: 4px;
-      background: rgba(255,255,255,0.1);
+      background: rgba(255,255,255,0.08);
       border-radius: 2px;
       margin-top: 10px;
       overflow: hidden;
@@ -219,24 +258,24 @@
     
     .progress-fill {
       height: 100%;
-      background: linear-gradient(90deg, #00d4ff, #7b2cbf);
+      background: var(--accent);
       width: 0%;
       transition: width 0.3s ease;
     }
     
     .info-box {
-      background: rgba(0, 212, 255, 0.1);
-      border: 1px solid rgba(0, 212, 255, 0.3);
+      background: var(--accent-soft);
+      border: 1px solid rgba(216, 92, 26, 0.3);
       border-radius: 8px;
       padding: 10px;
       font-size: 11px;
-      color: #00d4ff;
+      color: #f1bf9b;
       margin-top: 10px;
     }
 
     .section-title {
       font-size: 11px;
-      color: #888;
+      color: var(--muted);
       text-transform: uppercase;
       letter-spacing: 1px;
       margin-bottom: 8px;
@@ -245,9 +284,9 @@
 
     .api-input {
       width: 100%;
-      background: rgba(255,255,255,0.08);
-      border: 1px solid rgba(255,255,255,0.15);
-      color: #fff;
+      background: #121820;
+      border: 1px solid var(--border);
+      color: var(--text);
       padding: 8px 10px;
       border-radius: 6px;
       font-size: 11px;
@@ -258,16 +297,16 @@
     }
 
     .api-input:focus {
-      border-color: #00d4ff;
+      border-color: var(--accent);
     }
 
     .api-input::placeholder {
-      color: #555;
+      color: #697585;
     }
 
     .api-label {
       font-size: 11px;
-      color: #aaa;
+      color: #b0bac6;
       margin-bottom: 4px;
       display: flex;
       align-items: center;
@@ -279,27 +318,32 @@
       width: 6px;
       height: 6px;
       border-radius: 50%;
-      background: #dc3545;
+      background: var(--danger);
     }
 
     .api-status.active {
-      background: #28a745;
+      background: var(--success);
     }
 
     .engine-badge {
       font-size: 10px;
       padding: 2px 6px;
       border-radius: 4px;
-      background: rgba(123, 44, 191, 0.3);
-      color: #c084fc;
+      background: rgba(216, 92, 26, 0.14);
+      color: #f4b38b;
       margin-left: 4px;
     }
   </style>
 </head>
 <body>
   <div class="header">
-    <h1>🌸 Manwha Translator</h1>
-    <p>Traduction automatique EN → FR</p>
+    <div class="header-brand">
+      <img class="header-logo" src="branding/mat-browser-source.png" alt="Logo MAT">
+      <div class="header-copy">
+        <h1>MAT</h1>
+        <p>Manwha Auto Translator · EN → FR</p>
+      </div>
+    </div>
   </div>
   
   <div class="status-card">

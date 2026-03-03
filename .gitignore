@@ -21,6 +21,11 @@ backend/ocr-pipeline/.cache/
 
 # Branding binaires générés
 manwha-translator-extension/branding/*.png
+!manwha-translator-extension/branding/mat-browser-source.png
+!manwha-translator-extension/branding/mat-store-source.png
+!manwha-translator-extension/branding/store-marquee.png
+!manwha-translator-extension/branding/store-tile-small.png
+!manwha-translator-extension/branding/store-tile-large.png
 
 # Artefacts anciens
 manwha-translator-extension/lib/

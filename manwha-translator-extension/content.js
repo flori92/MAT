@@ -10,6 +10,7 @@
   let translatedImages = new Map();
   let imageElements = [];
   let pageTranslationContext = [];
+  const memoryCache = new Map();
   let settings = {
     displayMode: 'overlay',
     ocrEngine: 'auto',
@@ -145,15 +146,20 @@
   // Translate text using LibreTranslate (free, no API key needed)
   async function translateText(text) {
     if (!text || text.trim().length < 2) return null;
-    
+
     try {
       const cacheKey = getTranslationCacheKey(text);
+
+      const memoryCached = memoryCache.get(cacheKey);
+      if (memoryCached) return memoryCached;
+
       const cached = await sendRuntimeMessage({
         action: 'getCachedTranslation',
         key: cacheKey
       });
 
       if (cached && cached.translation) {
+        memoryCache.set(cacheKey, cached.translation);
         return cached.translation;
       }
 
@@ -165,7 +171,8 @@
       const translation = remoteTranslation?.translation || null;
 
       if (translation) {
-        await sendRuntimeMessage({
+        memoryCache.set(cacheKey, translation);
+        sendRuntimeMessage({
           action: 'cacheTranslation',
           key: cacheKey,
           translation
@@ -174,7 +181,6 @@
 
       return translation;
     } catch (e) {
-      console.error('Translation error:', e);
       return null;
     }
   }
@@ -390,10 +396,10 @@
   }
 
   function canvasToBackendImagePayload(canvas) {
-    const dataUrl = canvas.toDataURL('image/png');
+    const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
     return {
       base64: dataUrl.split(',')[1],
-      mimeType: 'image/png',
+      mimeType: 'image/jpeg',
       width: canvas.width,
       height: canvas.height
     };
@@ -610,34 +616,34 @@
   }
 
   async function finalizeAiBlocks(blocks) {
-    const repairedBlocks = [];
+    const validBlocks = (blocks || []).filter(
+      block => block && block.text && block.translatedText
+    );
 
-    for (const block of blocks || []) {
-      if (!block || !block.text || !block.translatedText) {
-        continue;
-      }
+    const settled = await Promise.all(
+      validBlocks.map(async block => {
+        let nextBlock = { ...block };
 
-      let nextBlock = { ...block };
-
-      if (needsTranslationRepair(nextBlock.text, nextBlock.translatedText)) {
-        const repairedTranslation = await translateText(nextBlock.text);
-        if (repairedTranslation) {
-          nextBlock = {
-            ...nextBlock,
-            translatedText: normalizeText(repairedTranslation),
-            repairedTranslation: true
-          };
+        if (needsTranslationRepair(nextBlock.text, nextBlock.translatedText)) {
+          const repairedTranslation = await translateText(nextBlock.text);
+          if (repairedTranslation) {
+            nextBlock = {
+              ...nextBlock,
+              translatedText: normalizeText(repairedTranslation),
+              repairedTranslation: true
+            };
+          }
         }
-      }
 
-      if (needsTranslationRepair(nextBlock.text, nextBlock.translatedText)) {
-        continue;
-      }
+        if (needsTranslationRepair(nextBlock.text, nextBlock.translatedText)) {
+          return null;
+        }
 
-      repairedBlocks.push(nextBlock);
-    }
+        return nextBlock;
+      })
+    );
 
-    return collapseOverlappingAiBlocks(repairedBlocks);
+    return collapseOverlappingAiBlocks(settled.filter(Boolean));
   }
 
   function sortBlocksByReadingOrder(blocks) {
@@ -2105,14 +2111,28 @@
       });
 
       let translatedCountForRun = 0;
+      const total = imageElements.length;
+      const concurrency = Math.min(3, total);
+      let nextIndex = 0;
 
-      // Process each image
-      for (let i = 0; i < imageElements.length; i++) {
-        const translated = await processImage(imageElements[i], i, imageElements.length);
-        if (translated) {
-          translatedCountForRun += 1;
+      async function worker() {
+        while (nextIndex < total) {
+          const i = nextIndex;
+          nextIndex += 1;
+          const translated = await processImage(imageElements[i], i, total);
+          if (translated) {
+            translatedCountForRun += 1;
+          }
+          updateProgress(
+            Math.round((nextIndex / total) * 95) + 2,
+            `Traitement: ${nextIndex}/${total} images...`
+          );
         }
       }
+
+      await Promise.all(
+        Array.from({ length: concurrency }, () => worker())
+      );
 
       updateProgress(100, 'Traduction terminée !');
 
@@ -2262,7 +2282,7 @@
       width: 36px;
       height: 36px;
       border-radius: 50%;
-      background: linear-gradient(135deg, #00d4ff, #7b2cbf);
+      background: #d85c1a;
       border: none;
       cursor: pointer;
       font-size: 18px;
@@ -2286,5 +2306,5 @@
   `;
   document.head.appendChild(style);
 
-  console.log('🌸 Manwha Translator loaded!');
+  console.log('MAT loaded!');
 })();

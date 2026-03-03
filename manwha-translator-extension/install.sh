@@ -3,7 +3,7 @@
 # Installation script for Manwha Translator Extension
 # This script helps install the extension on different browsers
 
-echo "🌸 Manwha Translator - Installation Script"
+echo "MAT - Installation Script"
 echo "=========================================="
 echo ""
 
@@ -111,7 +111,7 @@ echo "✅ Installation instructions displayed!"
 echo ""
 echo "💡 Tips:"
 echo "   - Pin the extension to your toolbar for easy access"
-echo "   - Click the 🌸 icon to open the translator"
+echo "   - Click the MAT icon to open the translator"
 echo "   - Use right-click on any image for quick translation"
 echo ""
 echo "📖 For more help, see README.md"

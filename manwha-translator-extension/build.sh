@@ -3,7 +3,7 @@
 # Build script for Manwha Translator Extension
 # Creates a distributable ZIP file
 
-echo "🌸 Manwha Translator - Build Script"
+echo "MAT - Build Script"
 echo "===================================="
 echo ""
 

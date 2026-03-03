@@ -205,13 +205,13 @@ async function getStartupGuidance() {
 chrome.runtime.onInstalled.addListener(() => {
   chrome.contextMenus.create({
     id: 'translateImage',
-    title: '🌸 Traduire cette image',
+    title: 'MAT · Traduire cette image',
     contexts: ['image']
   });
 
   chrome.contextMenus.create({
     id: 'translatePage',
-    title: '🌸 Traduire toutes les images',
+    title: 'MAT · Traduire toutes les images',
     contexts: ['page']
   });
 });
@@ -318,4 +318,4 @@ chrome.alarms.onAlarm.addListener((alarm) => {
   });
 });
 
-console.log('🌸 Manwha Translator background service loaded!');
+console.log('MAT background service loaded!');

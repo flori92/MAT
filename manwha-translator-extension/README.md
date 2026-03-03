@@ -1,4 +1,4 @@
-# 🌸 Manwha Auto Translator
+# MAT - Manwha Auto Translator
 
 Extension de navigateur pour traduire automatiquement les scans de manwha/manga de l'anglais vers le français.
 
@@ -68,13 +68,13 @@ Support experimental. La cible principale du projet est Chromium (`Chrome`, `Edg
 ## 🚀 Utilisation
 
 ### Méthode 1 : Via le popup
-1. Cliquez sur l'icône de l'extension 🌸 dans la barre d'outils
+1. Cliquez sur l'icône MAT dans la barre d'outils
 2. Cliquez sur **"Traduire cette page"**
 3. Attendez que la traduction se termine
 
 ### Méthode 2 : Clic droit
 1. Faites un clic droit sur une image de manwha
-2. Sélectionnez **"🌸 Traduire cette image"**
+2. Sélectionnez **"MAT · Traduire cette image"**
 
 ### Démo locale
 Une page de test locale est disponible dans `demo/reader-test.html`.

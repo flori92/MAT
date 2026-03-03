@@ -28,17 +28,17 @@ Le support Firefox est actuellement expérimental. La cible principale reste `Ch
 ### Traduire une page entière
 1. Allez sur un site de manwha (ex: Asura Scans)
 2. Ouvrez un chapitre
-3. **Cliquez** sur l'icône 🌸 dans la barre d'outils
+3. **Cliquez** sur l'icône MAT dans la barre d'outils
 4. **Cliquez** sur "Traduire cette page"
 5. Attendez quelques secondes...
 6. ✅ Les bulles de dialogue sont maintenant en français !
 
 ### Traduire une image spécifique
 1. **Faites un clic droit** sur l'image à traduire
-2. **Sélectionnez** "🌸 Traduire cette image"
+2. **Sélectionnez** "MAT · Traduire cette image"
 
 ### Mode automatique
-1. Ouvrez l'extension 🌸
+1. Ouvrez l'extension MAT
 2. **Activez** "Traduction auto"
 3. Les nouvelles images seront traduites automatiquement
 
