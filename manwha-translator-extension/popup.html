@@ -1,0 +1,384 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Manwha Auto Translator</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    
+    body {
+      width: 350px;
+      min-height: 400px;
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+      color: #fff;
+      padding: 20px;
+    }
+    
+    .header {
+      text-align: center;
+      margin-bottom: 20px;
+    }
+    
+    .header h1 {
+      font-size: 20px;
+      background: linear-gradient(90deg, #00d4ff, #7b2cbf);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+    
+    .header p {
+      font-size: 12px;
+      color: #888;
+      margin-top: 5px;
+    }
+    
+    .status-card {
+      background: rgba(255,255,255,0.05);
+      border-radius: 12px;
+      padding: 15px;
+      margin-bottom: 15px;
+      border: 1px solid rgba(255,255,255,0.1);
+    }
+    
+    .status-title {
+      font-size: 12px;
+      color: #888;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      margin-bottom: 8px;
+    }
+    
+    .status-value {
+      font-size: 14px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #28a745;
+      animation: pulse 2s infinite;
+    }
+    
+    .status-dot.inactive {
+      background: #dc3545;
+      animation: none;
+    }
+    
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
+    
+    .controls {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      margin-bottom: 15px;
+    }
+    
+    .btn {
+      padding: 12px 20px;
+      border: none;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.3s ease;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+    }
+    
+    .btn-primary {
+      background: linear-gradient(90deg, #00d4ff, #7b2cbf);
+      color: white;
+    }
+    
+    .btn-primary:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 5px 20px rgba(0, 212, 255, 0.3);
+    }
+    
+    .btn-secondary {
+      background: rgba(255,255,255,0.1);
+      color: white;
+      border: 1px solid rgba(255,255,255,0.2);
+    }
+    
+    .btn-secondary:hover {
+      background: rgba(255,255,255,0.15);
+    }
+    
+    .btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+      transform: none !important;
+    }
+    
+    .settings {
+      background: rgba(255,255,255,0.03);
+      border-radius: 12px;
+      padding: 15px;
+      border: 1px solid rgba(255,255,255,0.1);
+    }
+    
+    .setting-item {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 12px;
+    }
+    
+    .setting-item:last-child {
+      margin-bottom: 0;
+    }
+    
+    .setting-label {
+      font-size: 13px;
+      color: #ccc;
+    }
+    
+    .toggle {
+      position: relative;
+      width: 44px;
+      height: 24px;
+      background: #444;
+      border-radius: 12px;
+      cursor: pointer;
+      transition: background 0.3s;
+    }
+    
+    .toggle.active {
+      background: linear-gradient(90deg, #00d4ff, #7b2cbf);
+    }
+    
+    .toggle::after {
+      content: '';
+      position: absolute;
+      top: 2px;
+      left: 2px;
+      width: 20px;
+      height: 20px;
+      background: white;
+      border-radius: 50%;
+      transition: transform 0.3s;
+    }
+    
+    .toggle.active::after {
+      transform: translateX(20px);
+    }
+    
+    select {
+      background: rgba(255,255,255,0.1);
+      border: 1px solid rgba(255,255,255,0.2);
+      color: white;
+      padding: 6px 12px;
+      border-radius: 6px;
+      font-size: 12px;
+      cursor: pointer;
+    }
+    
+    select option {
+      background: #1a1a2e;
+    }
+    
+    .stats {
+      margin-top: 15px;
+      padding-top: 15px;
+      border-top: 1px solid rgba(255,255,255,0.1);
+      font-size: 11px;
+      color: #666;
+      text-align: center;
+    }
+    
+    .progress-bar {
+      width: 100%;
+      height: 4px;
+      background: rgba(255,255,255,0.1);
+      border-radius: 2px;
+      margin-top: 10px;
+      overflow: hidden;
+      display: none;
+    }
+    
+    .progress-bar.active {
+      display: block;
+    }
+    
+    .progress-fill {
+      height: 100%;
+      background: linear-gradient(90deg, #00d4ff, #7b2cbf);
+      width: 0%;
+      transition: width 0.3s ease;
+    }
+    
+    .info-box {
+      background: rgba(0, 212, 255, 0.1);
+      border: 1px solid rgba(0, 212, 255, 0.3);
+      border-radius: 8px;
+      padding: 10px;
+      font-size: 11px;
+      color: #00d4ff;
+      margin-top: 10px;
+    }
+
+    .section-title {
+      font-size: 11px;
+      color: #888;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      margin-bottom: 8px;
+      margin-top: 15px;
+    }
+
+    .api-input {
+      width: 100%;
+      background: rgba(255,255,255,0.08);
+      border: 1px solid rgba(255,255,255,0.15);
+      color: #fff;
+      padding: 8px 10px;
+      border-radius: 6px;
+      font-size: 11px;
+      font-family: monospace;
+      margin-bottom: 8px;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+
+    .api-input:focus {
+      border-color: #00d4ff;
+    }
+
+    .api-input::placeholder {
+      color: #555;
+    }
+
+    .api-label {
+      font-size: 11px;
+      color: #aaa;
+      margin-bottom: 4px;
+      display: flex;
+      align-items: center;
+      gap: 5px;
+    }
+
+    .api-status {
+      display: inline-block;
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: #dc3545;
+    }
+
+    .api-status.active {
+      background: #28a745;
+    }
+
+    .engine-badge {
+      font-size: 10px;
+      padding: 2px 6px;
+      border-radius: 4px;
+      background: rgba(123, 44, 191, 0.3);
+      color: #c084fc;
+      margin-left: 4px;
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1>🌸 Manwha Translator</h1>
+    <p>Traduction automatique EN → FR</p>
+  </div>
+  
+  <div class="status-card">
+    <div class="status-title">Statut</div>
+    <div class="status-value">
+      <span class="status-dot" id="statusDot"></span>
+      <span id="statusText">Prêt à traduire</span>
+    </div>
+    <div class="progress-bar" id="progressBar">
+      <div class="progress-fill" id="progressFill"></div>
+    </div>
+  </div>
+  
+  <div class="controls">
+    <button class="btn btn-primary" id="translateBtn">
+      <span>🔄</span> Traduire cette page
+    </button>
+    <button class="btn btn-secondary" id="autoTranslateBtn">
+      <span>⚡</span> Traduction auto: <span id="autoStatus">OFF</span>
+    </button>
+    <button class="btn btn-secondary" id="resetBtn">
+      <span>↩️</span> Réinitialiser
+    </button>
+  </div>
+  
+  <div class="settings">
+    <div class="setting-item">
+      <span class="setting-label">Mode d'affichage</span>
+      <select id="displayMode">
+        <option value="overlay">Superposé</option>
+        <option value="replace">Remplacer</option>
+        <option value="bubble">Bulles FR</option>
+      </select>
+    </div>
+    <div class="setting-item">
+      <span class="setting-label">Moteur OCR</span>
+      <select id="ocrEngine">
+        <option value="auto">🧩 Stack manga (backend)</option>
+        <option value="manga-stack">🧩 Stack manga forcee</option>
+        <option value="paddle">📘 PaddleOCR</option>
+        <option value="mangaocr">🗾 MangaOCR refine</option>
+        <option value="doctr">📄 docTR</option>
+        <option value="gemini">✨ Gemini Vision (secours)</option>
+        <option value="openai">🧠 OpenAI Vision (secours)</option>
+      </select>
+    </div>
+    <div class="setting-item">
+      <span class="setting-label">Conserver l'original</span>
+      <div class="toggle" id="keepOriginal"></div>
+    </div>
+  </div>
+
+  <div class="section-title">🔌 Backend</div>
+  <div class="settings">
+    <div class="api-label">
+      <span class="api-status" id="backendStatus"></span>
+      API backend <span class="engine-badge">OCR + traduction</span>
+    </div>
+    <input type="text" class="api-input" id="backendUrl" 
+           placeholder="http://127.0.0.1:8787" autocomplete="off">
+
+    <div class="api-label" style="margin-top: 6px;">
+      Jeton backend <span class="engine-badge">optionnel</span>
+    </div>
+    <input type="password" class="api-input" id="backendToken" 
+           placeholder="Bearer token" autocomplete="off">
+
+    <div class="stats" style="margin-top: 10px; padding-top: 10px;">
+      Les clés Gemini/OpenAI vivent côté backend, pas dans l’extension.
+    </div>
+  </div>
+  
+  <div class="info-box" id="infoBox" style="display: none;"></div>
+  
+  <div class="stats">
+    Images détectées: <span id="imageCount">0</span> | 
+    Traductions: <span id="translatedCount">0</span>
+  </div>
+  
+  <script src="popup.js"></script>
+</body>
+</html>

@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Manwha Translator Demo</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f4ede4;
+      --ink: #1e1d1a;
+      --card: #fffaf2;
+      --accent: #e07a5f;
+      --border: rgba(30, 29, 26, 0.12);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      font-family: Georgia, "Times New Roman", serif;
+      background:
+        radial-gradient(circle at top, rgba(224, 122, 95, 0.18), transparent 35%),
+        linear-gradient(180deg, #f8f1e8 0%, var(--bg) 100%);
+      color: var(--ink);
+    }
+
+    main {
+      max-width: 920px;
+      margin: 0 auto;
+      padding: 48px 20px 72px;
+    }
+
+    h1 {
+      margin: 0 0 12px;
+      font-size: clamp(2rem, 4vw, 3.5rem);
+      line-height: 0.95;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+
+    p {
+      max-width: 720px;
+      font-size: 1rem;
+      line-height: 1.6;
+    }
+
+    .reader {
+      display: grid;
+      gap: 28px;
+      margin-top: 32px;
+    }
+
+    .panel {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 24px;
+      padding: 20px;
+      box-shadow: 0 18px 60px rgba(0, 0, 0, 0.08);
+    }
+
+    .panel img {
+      display: block;
+      width: 100%;
+      height: auto;
+      border-radius: 18px;
+      background: white;
+    }
+
+    .badge {
+      display: inline-block;
+      margin-top: 24px;
+      padding: 8px 14px;
+      border-radius: 999px;
+      background: rgba(224, 122, 95, 0.12);
+      color: #8d3f29;
+      font-size: 0.9rem;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <span class="badge">Local demo page</span>
+    <h1>Reader Smoke Test</h1>
+    <p>
+      Ouvrez cette page dans Chromium, puis lancez l'extension sur les images ci-dessous.
+      Elles sont suffisamment grandes et verticales pour tester la détection, l'OCR et
+      l'affichage FR sans dépendre d'un site externe.
+    </p>
+
+    <section class="reader" id="reader"></section>
+  </main>
+
+  <script>
+    const panels = [
+      {
+        title: 'chapter-01-page-01',
+        svg: `
+          <svg xmlns="http://www.w3.org/2000/svg" width="900" height="1500" viewBox="0 0 900 1500">
+            <rect width="900" height="1500" fill="#fbf7ef"/>
+            <rect x="40" y="40" width="820" height="1420" rx="30" fill="#fefefe" stroke="#111" stroke-width="10"/>
+            <rect x="80" y="90" width="740" height="520" rx="28" fill="#dbe9f4"/>
+            <rect x="80" y="660" width="740" height="700" rx="28" fill="#efe3d0"/>
+            <ellipse cx="300" cy="250" rx="175" ry="110" fill="#fff" stroke="#111" stroke-width="8"/>
+            <ellipse cx="610" cy="460" rx="170" ry="100" fill="#fff" stroke="#111" stroke-width="8"/>
+            <polygon points="392,320 455,415 330,355" fill="#fff" stroke="#111" stroke-width="8"/>
+            <polygon points="520,540 470,650 610,575" fill="#fff" stroke="#111" stroke-width="8"/>
+            <text x="300" y="235" text-anchor="middle" font-family="Arial, sans-serif" font-size="42" font-weight="700" fill="#111">
+              I can't keep
+            </text>
+            <text x="300" y="290" text-anchor="middle" font-family="Arial, sans-serif" font-size="42" font-weight="700" fill="#111">
+              running away.
+            </text>
+            <text x="610" y="445" text-anchor="middle" font-family="Arial, sans-serif" font-size="40" font-weight="700" fill="#111">
+              Then stand up
+            </text>
+            <text x="610" y="500" text-anchor="middle" font-family="Arial, sans-serif" font-size="40" font-weight="700" fill="#111">
+              and face me!
+            </text>
+            <text x="450" y="1220" text-anchor="middle" font-family="Arial, sans-serif" font-size="60" font-weight="700" fill="#5e3023">
+              A dramatic pause fills the corridor.
+            </text>
+          </svg>
+        `
+      },
+      {
+        title: 'chapter-01-page-02',
+        svg: `
+          <svg xmlns="http://www.w3.org/2000/svg" width="900" height="1500" viewBox="0 0 900 1500">
+            <rect width="900" height="1500" fill="#f7efe7"/>
+            <rect x="50" y="50" width="800" height="1400" rx="36" fill="#fff" stroke="#111" stroke-width="10"/>
+            <rect x="95" y="100" width="710" height="430" rx="30" fill="#c9e4ca"/>
+            <rect x="95" y="580" width="710" height="780" rx="30" fill="#ddd7f9"/>
+            <ellipse cx="265" cy="305" rx="165" ry="108" fill="#fff" stroke="#111" stroke-width="8"/>
+            <ellipse cx="640" cy="880" rx="180" ry="112" fill="#fff" stroke="#111" stroke-width="8"/>
+            <polygon points="330,365 385,465 290,395" fill="#fff" stroke="#111" stroke-width="8"/>
+            <polygon points="560,962 520,1090 645,970" fill="#fff" stroke="#111" stroke-width="8"/>
+            <text x="265" y="285" text-anchor="middle" font-family="Arial, sans-serif" font-size="40" font-weight="700" fill="#111">
+              Are you sure
+            </text>
+            <text x="265" y="340" text-anchor="middle" font-family="Arial, sans-serif" font-size="40" font-weight="700" fill="#111">
+              about this plan?
+            </text>
+            <text x="640" y="858" text-anchor="middle" font-family="Arial, sans-serif" font-size="38" font-weight="700" fill="#111">
+              We only get
+            </text>
+            <text x="640" y="910" text-anchor="middle" font-family="Arial, sans-serif" font-size="38" font-weight="700" fill="#111">
+              one chance.
+            </text>
+            <text x="450" y="1260" text-anchor="middle" font-family="Arial, sans-serif" font-size="58" font-weight="700" fill="#243b53">
+              The city waits under a silent sky.
+            </text>
+          </svg>
+        `
+      }
+    ];
+
+    const reader = document.getElementById('reader');
+
+    for (const panel of panels) {
+      const wrapper = document.createElement('article');
+      wrapper.className = 'panel';
+
+      const image = document.createElement('img');
+      image.alt = panel.title;
+      image.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(panel.svg)}`;
+
+      wrapper.appendChild(image);
+      reader.appendChild(wrapper);
+    }
+  </script>
+</body>
+</html>

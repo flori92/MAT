@@ -1,0 +1,27 @@
+node_modules/
+.env
+*.zip
+__pycache__/
+*.pyc
+.venv*/
+dist/
+build/
+.DS_Store
+ziPa0hSv
+
+# Caches modèles ML (très volumineux)
+backend/ocr-pipeline/.cache/
+*.bin
+*.pdiparams
+*.safetensors
+*.wasm
+
+# Logs
+*.log
+
+# Branding binaires générés
+manwha-translator-extension/branding/*.png
+
+# Artefacts anciens
+manwha-translator-extension/lib/
+manwha-translator-extension/zi*

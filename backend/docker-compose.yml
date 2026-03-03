@@ -1,0 +1,33 @@
+version: "3.9"
+
+services:
+  gateway:
+    image: node:20-alpine
+    working_dir: /app
+    command: ["node", "server.mjs"]
+    environment:
+      HOST: 0.0.0.0
+      PORT: 8787
+      OCR_PIPELINE_URL: http://ocr-pipeline:8788
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      BACKEND_AUTH_TOKEN: ${BACKEND_AUTH_TOKEN:-}
+      ENABLE_PUBLIC_TRANSLATION_FALLBACK: ${ENABLE_PUBLIC_TRANSLATION_FALLBACK:-false}
+    ports:
+      - "8787:8787"
+    volumes:
+      - ./:/app
+    depends_on:
+      - ocr-pipeline
+
+  ocr-pipeline:
+    build:
+      context: ./ocr-pipeline
+    environment:
+      PADDLE_LANG: ${PADDLE_LANG:-en}
+      DOCTR_DET_ARCH: ${DOCTR_DET_ARCH:-db_resnet50}
+      DOCTR_RECO_ARCH: ${DOCTR_RECO_ARCH:-parseq}
+      MMOCR_DET: ${MMOCR_DET:-DBNet}
+      MMOCR_REC: ${MMOCR_REC:-SVTR_TINY}
+    ports:
+      - "8788:8788"
