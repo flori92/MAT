@@ -1049,6 +1049,25 @@ async function handleTranslate(req, res, body) {
   return sendJson(res, 200, { translation });
 }
 
+async function handleBatchTranslate(req, res, body) {
+  if (!assertAuth(req)) {
+    return sendJson(res, 401, { error: 'Unauthorized' });
+  }
+
+  const texts = Array.isArray(body?.texts) ? body.texts : [];
+  const context = body?.context || null;
+
+  if (texts.length === 0) {
+    return sendJson(res, 400, { error: 'Missing texts array' });
+  }
+
+  const results = await Promise.all(
+    texts.map(text => translateTextCached(normalizeText(text), context))
+  );
+
+  return sendJson(res, 200, { translations: results });
+}
+
 async function handleAiOcr(req, res, body) {
   if (!assertAuth(req)) {
     return sendJson(res, 401, { error: 'Unauthorized' });
@@ -1114,6 +1133,10 @@ const server = http.createServer(async (req, res) => {
 
   if (req.url === '/v1/translate' && req.method === 'POST') {
     return handleTranslate(req, res, body);
+  }
+
+  if (req.url === '/v1/translate-batch' && req.method === 'POST') {
+    return handleBatchTranslate(req, res, body);
   }
 
   if (req.url === '/v1/ai-ocr' && req.method === 'POST') {

@@ -149,6 +149,17 @@ async function translateTextViaBackend(text, source = 'en', target = 'fr', conte
   return payload?.translation || null;
 }
 
+async function batchTranslateViaBackend(texts, source = 'en', target = 'fr', context = null) {
+  const payload = await fetchBackendJson('/v1/translate-batch', {
+    texts,
+    source,
+    target,
+    context
+  }, { timeoutMs: 30000 });
+
+  return Array.isArray(payload?.translations) ? payload.translations : [];
+}
+
 async function aiOcrViaBackend(image, ocrEngine, context) {
   const payload = await fetchBackendJson('/v1/ai-ocr', {
     image,
@@ -260,6 +271,12 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     case 'translateText':
       translateTextViaBackend(request.text, request.source || 'en', request.target || 'fr', request.context || null)
         .then(translation => sendResponse({ translation }))
+        .catch(error => sendResponse({ error: error.message }));
+      return true;
+
+    case 'batchTranslate':
+      batchTranslateViaBackend(request.texts, request.source || 'en', request.target || 'fr', request.context || null)
+        .then(translations => sendResponse({ translations }))
         .catch(error => sendResponse({ error: error.message }));
       return true;
 

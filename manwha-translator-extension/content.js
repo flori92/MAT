@@ -615,35 +615,81 @@
     });
   }
 
+  async function batchTranslateTexts(texts) {
+    if (texts.length === 0) return new Map();
+
+    const uncached = [];
+    const results = new Map();
+
+    for (const text of texts) {
+      const cacheKey = getTranslationCacheKey(text);
+      const memoryCached = memoryCache.get(cacheKey);
+      if (memoryCached) {
+        results.set(text, memoryCached);
+      } else {
+        uncached.push(text);
+      }
+    }
+
+    if (uncached.length === 0) return results;
+
+    const response = await sendRuntimeMessage({
+      action: 'batchTranslate',
+      texts: uncached
+    });
+
+    const translations = response?.translations || [];
+    uncached.forEach((text, i) => {
+      const translation = translations[i] || null;
+      if (translation) {
+        const cacheKey = getTranslationCacheKey(text);
+        memoryCache.set(cacheKey, translation);
+        results.set(text, translation);
+        sendRuntimeMessage({
+          action: 'cacheTranslation',
+          key: cacheKey,
+          translation
+        });
+      }
+    });
+
+    return results;
+  }
+
   async function finalizeAiBlocks(blocks) {
     const validBlocks = (blocks || []).filter(
       block => block && block.text && block.translatedText
     );
 
-    const settled = await Promise.all(
-      validBlocks.map(async block => {
-        let nextBlock = { ...block };
+    const textsToRepair = validBlocks
+      .filter(block => needsTranslationRepair(block.text, block.translatedText))
+      .map(block => block.text);
 
-        if (needsTranslationRepair(nextBlock.text, nextBlock.translatedText)) {
-          const repairedTranslation = await translateText(nextBlock.text);
-          if (repairedTranslation) {
-            nextBlock = {
-              ...nextBlock,
-              translatedText: normalizeText(repairedTranslation),
-              repairedTranslation: true
-            };
-          }
+    const uniqueTexts = [...new Set(textsToRepair)];
+    const repairMap = await batchTranslateTexts(uniqueTexts);
+
+    const repairedBlocks = validBlocks.map(block => {
+      let nextBlock = { ...block };
+
+      if (needsTranslationRepair(nextBlock.text, nextBlock.translatedText)) {
+        const repaired = repairMap.get(nextBlock.text);
+        if (repaired) {
+          nextBlock = {
+            ...nextBlock,
+            translatedText: normalizeText(repaired),
+            repairedTranslation: true
+          };
         }
+      }
 
-        if (needsTranslationRepair(nextBlock.text, nextBlock.translatedText)) {
-          return null;
-        }
+      if (needsTranslationRepair(nextBlock.text, nextBlock.translatedText)) {
+        return null;
+      }
 
-        return nextBlock;
-      })
-    );
+      return nextBlock;
+    });
 
-    return collapseOverlappingAiBlocks(settled.filter(Boolean));
+    return collapseOverlappingAiBlocks(repairedBlocks.filter(Boolean));
   }
 
   function sortBlocksByReadingOrder(blocks) {
