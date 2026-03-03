@@ -42,10 +42,16 @@
       selectors: ['.chapter-content img', '.read-container img', '.chapter-container img']
     },
     {
+      id: 'ts-reader',
+      hosts: [/arenascan/i, /mangabuddy/i, /mangatx/i, /mangakakalot/i, /chapmanganato/i, /mangapill/i, /mangasee/i, /comick/i, /kunmanga/i, /topmanhua/i],
+      readerRoots: ['#readerarea', '.reader-area', '.reading-content', '.entry-content'],
+      selectors: ['#readerarea img', '.reader-area img', '.reading-content img', '.entry-content img']
+    },
+    {
       id: 'generic-reader',
-      hosts: [/webtoon/i, /manga/i, /manhwa/i],
-      readerRoots: ['#reader', '.reader', '.viewer', '.chapter-reader', '.reader-main'],
-      selectors: ['#reader img', '.viewer img', '.chapter-reader img', '.reader-main img']
+      hosts: [/webtoon/i, /manga/i, /manhwa/i, /scan/i, /comic/i],
+      readerRoots: ['#reader', '#readerarea', '.reader', '.reader-area', '.viewer', '.chapter-reader', '.reader-main'],
+      selectors: ['#reader img', '#readerarea img', '.viewer img', '.chapter-reader img', '.reader-main img']
     }
   ];
 

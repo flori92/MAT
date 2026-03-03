@@ -880,18 +880,6 @@ async function ocrWithLocalPipeline(image, ocrEngine, context) {
   };
 }
 
-function shouldEscalateLocalOcr(result, requestedEngine, hasVisionProvider) {
-  if (!result || !hasVisionProvider) {
-    return false;
-  }
-
-  if (!['auto', 'manga-stack'].includes(requestedEngine)) {
-    return false;
-  }
-
-  return !!result?.quality?.needsVisionFallback;
-}
-
 async function ocrWithGemini(image, context) {
   if (!config.geminiApiKey) {
     return null;
@@ -968,71 +956,198 @@ async function ocrWithOpenAI(image, context) {
   return normalizeBlockList(parseAiResponse(data.choices?.[0]?.message?.content || ''));
 }
 
+function scoreOcrResult(result) {
+  if (!result || !result.blocks || result.blocks.length === 0) return 0;
+  const blocks = result.blocks;
+  const blockCount = blocks.length;
+  const hasBbox = blocks.filter(b => b.bbox && b.bbox.width > 0).length;
+  const hasTranslation = blocks.filter(b => b.translated && b.translated.trim()).length;
+  const avgConfidence = result.quality?.meanConfidence ?? 0.5;
+  return (
+    Math.min(blockCount, 20) * 3 +
+    hasBbox * 2 +
+    hasTranslation * 2 +
+    avgConfidence * 10 +
+    (result.quality?.needsVisionFallback ? -15 : 0)
+  );
+}
+
+function mergeOcrResults(primary, secondary) {
+  if (!secondary || !secondary.blocks || secondary.blocks.length === 0) return primary;
+  if (!primary || !primary.blocks || primary.blocks.length === 0) return secondary;
+
+  const primaryBboxes = primary.blocks
+    .filter(b => b.bbox)
+    .map(b => ({ cx: b.bbox.x + b.bbox.width / 2, cy: b.bbox.y + b.bbox.height / 2 }));
+
+  const merged = [...primary.blocks];
+  for (const block of secondary.blocks) {
+    if (!block.bbox) continue;
+    const cx = block.bbox.x + block.bbox.width / 2;
+    const cy = block.bbox.y + block.bbox.height / 2;
+    const isDuplicate = primaryBboxes.some(
+      p => Math.abs(p.cx - cx) < 0.08 && Math.abs(p.cy - cy) < 0.08
+    );
+    if (!isDuplicate) {
+      merged.push(block);
+    }
+  }
+
+  return {
+    engine: `${primary.engine}+${secondary.engine}`,
+    blocks: merged,
+    quality: primary.quality,
+    diagnostics: {
+      ...(primary.diagnostics || {}),
+      mergedFrom: secondary.engine,
+      mergedBlocks: secondary.blocks.length
+    }
+  };
+}
+
 async function runAiOcr(image, ocrEngine, context) {
   const normalizedEngine = typeof ocrEngine === 'string' ? ocrEngine.trim() : '';
   const requestedEngine = SUPPORTED_OCR_ENGINE_IDS.has(normalizedEngine) ? normalizedEngine : 'auto';
-  const providers = [];
-  const hasVisionProvider = !!(config.geminiApiKey || config.openaiApiKey);
-  let bestLocalResult = null;
+  const hasLocalPipeline = LOCAL_OCR_ENGINES.has(requestedEngine) && !!config.ocrServiceUrl;
+  const hasGemini = !!config.geminiApiKey;
+  const hasOpenAI = !!config.openaiApiKey;
+  const hasVisionProvider = hasGemini || hasOpenAI;
+  const log = (...args) => console.log('[OCR]', ...args);
 
-  if (LOCAL_OCR_ENGINES.has(requestedEngine) && config.ocrServiceUrl) {
-    providers.push([
-      requestedEngine === 'auto' ? 'manga-stack' : requestedEngine,
-      async () => ocrWithLocalPipeline(image, requestedEngine, context)
-    ]);
+  log(`Requête OCR engine=${requestedEngine} local=${hasLocalPipeline} gemini=${hasGemini} openai=${hasOpenAI}`);
+
+  // Explicit engine request (not auto) — route directly
+  if (requestedEngine === 'gemini') {
+    if (!hasGemini) throw Object.assign(new Error('Clé Gemini non configurée'), { statusCode: 503 });
+    log('Route directe → Gemini Vision');
+    const blocks = normalizeBlockList(await ocrWithGemini(image, context));
+    return { engine: 'Gemini', blocks: await ensureTranslatedBlocks(blocks, context) };
+  }
+  if (requestedEngine === 'openai') {
+    if (!hasOpenAI) throw Object.assign(new Error('Clé OpenAI non configurée'), { statusCode: 503 });
+    log('Route directe → OpenAI Vision');
+    const blocks = normalizeBlockList(await ocrWithOpenAI(image, context));
+    return { engine: 'OpenAI', blocks: await ensureTranslatedBlocks(blocks, context) };
   }
 
-  if ((requestedEngine === 'auto' || requestedEngine === 'gemini') && config.geminiApiKey) {
-    providers.push([
-      'Gemini',
-      async () => ({ engine: 'Gemini', blocks: await ocrWithGemini(image, context) })
-    ]);
-  }
-
-  if ((requestedEngine === 'auto' || requestedEngine === 'openai') && config.openaiApiKey) {
-    providers.push([
-      'OpenAI',
-      async () => ({ engine: 'OpenAI', blocks: await ocrWithOpenAI(image, context) })
-    ]);
-  }
-
-  if (providers.length === 0) {
-    const error = new Error('Aucun moteur OCR backend configure pour cette requete');
+  // No provider at all
+  if (!hasLocalPipeline && !hasVisionProvider) {
+    const error = new Error(
+      'Aucun moteur OCR backend configure. ' +
+      'Verifiez: (1) OCR_PIPELINE_URL dans .env + pipeline Python demarré, ' +
+      'ou (2) GEMINI_API_KEY / OPENAI_API_KEY dans backend/.env'
+    );
     error.statusCode = 503;
     throw error;
   }
 
-  for (const [name, run] of providers) {
+  // --- Smart strategy for auto / manga-stack / paddle / doctr / mangaocr ---
+  let localResult = null;
+  let localScore = 0;
+
+  // Phase 1: Try local pipeline (free, fast)
+  if (hasLocalPipeline) {
     try {
-      const result = await run();
-      const blocks = normalizeBlockList(result?.blocks || []);
-      if (blocks.length === 0) {
-        continue;
+      const t0 = Date.now();
+      localResult = await ocrWithLocalPipeline(image, requestedEngine, context);
+      const elapsed = Date.now() - t0;
+      if (localResult && localResult.blocks.length > 0) {
+        localScore = scoreOcrResult(localResult);
+        log(`Local pipeline → ${localResult.blocks.length} bloc(s), score=${localScore}, ${elapsed}ms`);
+      } else {
+        log(`Local pipeline → 0 blocs, ${elapsed}ms`);
       }
-
-      const normalizedResult = {
-        engine: result?.engine || name,
-        blocks: await ensureTranslatedBlocks(blocks, context),
-        quality: result?.quality || null,
-        diagnostics: result?.diagnostics || null
-      };
-
-      if (LOCAL_OCR_ENGINES.has(requestedEngine) && shouldEscalateLocalOcr(normalizedResult, requestedEngine, hasVisionProvider)) {
-        bestLocalResult = normalizedResult;
-        continue;
-      }
-
-      return normalizedResult;
-    } catch {
-      continue;
+    } catch (err) {
+      log(`Local pipeline erreur: ${err.message}`);
     }
   }
 
-  if (bestLocalResult) {
-    return bestLocalResult;
+  // Phase 2: Decide if we need vision escalation
+  const LOCAL_GOOD_THRESHOLD = 30;
+  const LOCAL_SUFFICIENT_THRESHOLD = 15;
+  const needsVisionEscalation = localScore < LOCAL_GOOD_THRESHOLD && hasVisionProvider;
+  const localIsSufficient = localScore >= LOCAL_SUFFICIENT_THRESHOLD;
+
+  if (localScore >= LOCAL_GOOD_THRESHOLD) {
+    log(`Score local ${localScore} >= ${LOCAL_GOOD_THRESHOLD} → résultat accepté sans escalade`);
+    const blocks = await ensureTranslatedBlocks(localResult.blocks, context);
+    return { ...localResult, blocks };
   }
 
-  return { engine: 'backend', blocks: [] };
+  // Phase 3: Vision escalation (parallel Gemini + OpenAI when both available)
+  let visionResult = null;
+
+  if (needsVisionEscalation) {
+    log(`Score local ${localScore} < ${LOCAL_GOOD_THRESHOLD} → escalade vision`);
+
+    const visionProviders = [];
+    if (hasGemini) visionProviders.push(['Gemini', () => ocrWithGemini(image, context)]);
+    if (hasOpenAI) visionProviders.push(['OpenAI', () => ocrWithOpenAI(image, context)]);
+
+    // Run vision providers in parallel for speed
+    const visionResults = await Promise.allSettled(
+      visionProviders.map(async ([name, run]) => {
+        const t0 = Date.now();
+        try {
+          const blocks = normalizeBlockList(await run());
+          const elapsed = Date.now() - t0;
+          log(`${name} Vision → ${blocks.length} bloc(s), ${elapsed}ms`);
+          return { engine: name, blocks, elapsed };
+        } catch (err) {
+          log(`${name} Vision erreur: ${err.message} (${Date.now() - t0}ms)`);
+          throw err;
+        }
+      })
+    );
+
+    // Pick best vision result
+    let bestVisionScore = 0;
+    for (const settled of visionResults) {
+      if (settled.status !== 'fulfilled' || !settled.value.blocks.length) continue;
+      const candidate = settled.value;
+      const score = scoreOcrResult(candidate);
+      if (score > bestVisionScore) {
+        bestVisionScore = score;
+        visionResult = candidate;
+      }
+    }
+
+    if (visionResult) {
+      log(`Meilleur vision: ${visionResult.engine} score=${bestVisionScore}`);
+    }
+  }
+
+  // Phase 4: Combine results
+  if (visionResult && visionResult.blocks.length > 0) {
+    if (localIsSufficient && localResult) {
+      // Merge local bbox precision + vision translation quality
+      const merged = mergeOcrResults(
+        { engine: visionResult.engine, blocks: visionResult.blocks, quality: localResult.quality, diagnostics: localResult.diagnostics },
+        localResult
+      );
+      log(`Merge ${visionResult.engine} + local → ${merged.blocks.length} bloc(s)`);
+      return { ...merged, blocks: await ensureTranslatedBlocks(merged.blocks, context) };
+    }
+
+    log(`Vision seule → ${visionResult.engine} (${visionResult.blocks.length} blocs)`);
+    return {
+      engine: visionResult.engine,
+      blocks: await ensureTranslatedBlocks(visionResult.blocks, context),
+      diagnostics: { escalatedFrom: 'local', reason: localResult ? 'low-quality' : 'no-local-blocks' }
+    };
+  }
+
+  // Phase 5: Fallback to local if vision failed but local had something
+  if (localResult && localResult.blocks.length > 0) {
+    log(`Fallback local (vision indisponible/échouée) → ${localResult.blocks.length} bloc(s)`);
+    return {
+      ...localResult,
+      blocks: await ensureTranslatedBlocks(localResult.blocks, context)
+    };
+  }
+
+  log('Aucun provider n\'a retourné de blocs exploitables');
+  return { engine: 'backend', blocks: [], diagnostics: { localScore, hasLocalPipeline, hasGemini, hasOpenAI } };
 }
 
 async function handleTranslate(req, res, body) {

@@ -106,19 +106,10 @@
   // Check if an image is likely a manwha/manga scan
   function isManwhaImage(img) {
     const src = resolveImageSource(img);
-    const width = img.naturalWidth || img.width || 0;
-    const height = img.naturalHeight || img.height || 0;
     const alt = (img.alt || '').toLowerCase();
     const className = typeof img.className === 'string' ? img.className.toLowerCase() : '';
-    const rect = img.getBoundingClientRect();
-    const hidden = rect.width === 0 || rect.height === 0 || getComputedStyle(img).display === 'none';
-    const activeAdapter = getActiveSiteAdapter();
-    const insideReaderRoot = activeAdapter?.readerRoots?.some(selector => img.closest(selector)) || false;
-    
-    // Skip small icons and thumbnails
-    if (width < 400 && height < 400) return false;
-    if (width < 200 || height < 300) return false;
-    if (hidden) return false;
+
+    // Always skip obvious non-content images
     if (/avatar|logo|icon|banner|cover|thumb|thumbnail|advert/i.test(`${src} ${alt} ${className}`)) {
       return false;
     }
@@ -126,30 +117,62 @@
       return false;
     }
 
-    // Check for common manwha image patterns
-    const manwhaPatterns = [
+    // Check if inside a known reader container (strong signal — skip size checks)
+    const activeAdapter = getActiveSiteAdapter();
+    const insideReaderRoot = activeAdapter?.readerRoots?.some(selector => img.closest(selector)) || false;
+    const insideGenericReader = img.closest(
+      '.reader, .reading-content, #reader, #readerarea, .reader-area, .viewer, .chapter-content'
+    ) !== null;
+
+    // Strong URL patterns
+    const strongPatterns = [
+      /\/manga\//i,
+      /\/chapter\//i,
+      /\/scan\//i,
+      /\/manhwa\//i,
+      /\/manhua\//i,
+      /\/webtoon\//i,
+      /wp-content\/uploads\/manga/i,
+      /ch_\d+/i
+    ];
+    const hasStrongUrlMatch = strongPatterns.some(pattern => pattern.test(src));
+
+    // Alt text signals (ts_reader uses "Title Chapter page N")
+    const hasPageAlt = /page\s*\d+/i.test(alt);
+
+    // If we have a strong contextual signal, trust it even without dimensions
+    if (insideReaderRoot || insideGenericReader || hasStrongUrlMatch || hasPageAlt) {
+      // Only reject if explicitly hidden
+      const rect = img.getBoundingClientRect();
+      const hidden = rect.width === 0 && rect.height === 0 && getComputedStyle(img).display === 'none';
+      return !hidden;
+    }
+
+    // Fallback: dimension-based detection for images outside known readers
+    const width = img.naturalWidth || img.width || 0;
+    const height = img.naturalHeight || img.height || 0;
+    if (width < 400 && height < 400) return false;
+    if (width < 200 || height < 300) return false;
+
+    const rect = img.getBoundingClientRect();
+    const hidden = rect.width === 0 || rect.height === 0 || getComputedStyle(img).display === 'none';
+    if (hidden) return false;
+
+    const weakPatterns = [
       /chapter/i,
       /scan/i,
       /manga/i,
-      /manwha/i,
-      /manhua/i,
-      /webtoon/i,
       /comic/i,
       /page/i,
       /\d+\.\w+$/,
-      /img.*\d+/i,
-      /image.*\d+/i
+      /img.*\d+/i
     ];
 
-    const matchesPattern = manwhaPatterns.some(pattern => pattern.test(src));
-    
-    // Check aspect ratio (manwha are typically vertical)
+    const matchesPattern = weakPatterns.some(pattern => pattern.test(src));
     const aspectRatio = height / width;
     const isVertical = aspectRatio > 1.2;
 
-    return matchesPattern || isVertical || className.includes('manga') || 
-           className.includes('chapter') || insideReaderRoot ||
-           img.closest('.reader, .reading-content, #reader, .viewer') !== null;
+    return matchesPattern || isVertical || className.includes('manga') || className.includes('chapter');
   }
 
   // Translate text using LibreTranslate (free, no API key needed)
@@ -907,6 +930,124 @@
 
   const processingInFlight = new Set();
 
+  // --- Image slicing for oversized manhwa strips ---
+  const SLICE_HEIGHT_THRESHOLD = 3000;
+  const SLICE_TARGET_HEIGHT = 2000;
+  const SLICE_OVERLAP = 100; // overlap to avoid cutting through speech bubbles
+
+  const MIN_SLICE_HEIGHT = 200;
+
+  function createSliceCanvases(sourceCanvas) {
+    const { width, height } = sourceCanvas;
+    if (height <= SLICE_HEIGHT_THRESHOLD) {
+      return [{ canvas: sourceCanvas, offsetY: 0, owned: false }];
+    }
+
+    const slices = [];
+    let y = 0;
+
+    while (y < height) {
+      const remaining = height - y;
+      const isLastSlice = remaining <= SLICE_TARGET_HEIGHT;
+      const sliceH = isLastSlice ? remaining : SLICE_TARGET_HEIGHT;
+
+      // Skip tiny final fragments — they produce poor OCR
+      if (sliceH < MIN_SLICE_HEIGHT && slices.length > 0) break;
+
+      const sliceCanvas = document.createElement('canvas');
+      sliceCanvas.width = width;
+      sliceCanvas.height = sliceH;
+      const sliceCtx = sliceCanvas.getContext('2d');
+      sliceCtx.drawImage(sourceCanvas, 0, y, width, sliceH, 0, 0, width, sliceH);
+      slices.push({ canvas: sliceCanvas, offsetY: y, owned: true });
+
+      if (isLastSlice) break;
+      y += SLICE_TARGET_HEIGHT - SLICE_OVERLAP;
+    }
+
+    return slices;
+  }
+
+  function releaseSliceCanvases(slices) {
+    for (const slice of slices) {
+      if (slice.owned && slice.canvas) {
+        slice.canvas.width = 0;
+        slice.canvas.height = 0;
+      }
+    }
+  }
+
+  function getBlockY(block) {
+    if (block.bbox && typeof block.bbox === 'object') return block.bbox.y ?? 0;
+    return typeof block.y === 'number' ? block.y : 0;
+  }
+
+  function shiftBlockY(block, offsetY) {
+    const shifted = { ...block };
+    if (shifted.bbox && typeof shifted.bbox === 'object') {
+      shifted.bbox = { ...shifted.bbox, y: (shifted.bbox.y ?? 0) + offsetY };
+    }
+    if (typeof shifted.y === 'number') {
+      shifted.y = shifted.y + offsetY;
+    }
+    return shifted;
+  }
+
+  async function ocrSlicesParallel(slices, engine, contextInfo) {
+    let results;
+    try {
+      results = await Promise.all(
+        slices.map(async ({ canvas: sliceCanvas, offsetY }) => {
+          try {
+            const aiResult = await requestAiOcr(sliceCanvas, engine, contextInfo);
+            if (!aiResult || !aiResult.blocks || aiResult.blocks.length === 0) {
+              return [];
+            }
+            return aiResult.blocks.map(block => shiftBlockY(block, offsetY));
+          } catch (err) {
+            console.warn('[ManwhaTranslator] Slice OCR failed at offset', offsetY, err.message);
+            return [];
+          }
+        })
+      );
+    } finally {
+      releaseSliceCanvases(slices);
+    }
+
+    // Deduplicate blocks from overlapping regions using spatial buckets
+    const allBlocks = results.flat();
+    const seen = new Map();
+    const deduped = [];
+
+    for (const block of allBlocks) {
+      const bY = getBlockY(block);
+      const bText = (block.translated || block.original || '').toLowerCase().trim();
+      const bucket = Math.floor(bY / 200);
+      let isDuplicate = false;
+
+      for (let b = bucket - 1; b <= bucket + 1; b++) {
+        const key = `${b}:${bText}`;
+        if (seen.has(key)) {
+          const existingY = seen.get(key);
+          if (Math.abs(bY - existingY) < SLICE_OVERLAP) {
+            isDuplicate = true;
+            break;
+          }
+        }
+      }
+
+      if (!isDuplicate) {
+        deduped.push(block);
+        seen.set(`${bucket}:${bText}`, bY);
+      }
+    }
+
+    return {
+      blocks: deduped,
+      engine: 'sliced'
+    };
+  }
+
   // Process a single image
   async function processImage(img, index, total) {
     const existingEntry = translatedImages.get(img);
@@ -936,11 +1077,17 @@
 
       updateProgress(Math.round((index / total) * 100),
         `OCR backend — image ${index + 1}/${total}...`);
-      const aiResult = await requestAiOcr(
-        canvas,
-        engine,
-        buildAiContext(index, total)
-      );
+
+      // Slice oversized images into smaller segments for OCR
+      const slices = createSliceCanvases(canvas);
+      const isSliced = slices.length > 1;
+      if (isSliced) {
+        console.log(`[ManwhaTranslator] Image ${index + 1} sliced into ${slices.length} segments (${canvas.width}x${canvas.height})`);
+      }
+
+      const aiResult = isSliced
+        ? await ocrSlicesParallel(slices, engine, buildAiContext(index, total))
+        : await requestAiOcr(canvas, engine, buildAiContext(index, total));
 
       let translatedBlocks = [];
       let extractedTextBlocks = null;
@@ -2473,9 +2620,29 @@
     autoTranslate = storedSettings.autoTranslate;
     settings = { ...settings, ...storedSettings };
 
-    // Start eager background translation pipeline immediately
-    // Processes ALL manhwa images as soon as the page loads
-    setTimeout(() => setupEagerPipeline(), 1500);
+    // Start eager background translation pipeline
+    // Wait for dynamic readers (ts_reader etc.) to inject images
+    function startEagerWhenReady() {
+      const images = detectManwhaImages();
+      if (images.length > 0) {
+        setupEagerPipeline();
+        return;
+      }
+
+      // Retry with increasing delays for dynamically injected images
+      let attempts = 0;
+      const maxAttempts = 8;
+      const retryInterval = setInterval(() => {
+        attempts += 1;
+        const found = detectManwhaImages();
+        if (found.length > 0 || attempts >= maxAttempts) {
+          clearInterval(retryInterval);
+          setupEagerPipeline();
+        }
+      }, 1000);
+    }
+
+    setTimeout(startEagerWhenReady, 800);
 
     if (autoTranslate) {
       setupAutoTranslate();
