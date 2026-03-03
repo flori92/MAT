@@ -183,24 +183,31 @@ async function getBackendHealth() {
     headers.Authorization = `Bearer ${backendToken}`;
   }
 
-  try {
-    const response = await fetchWithTimeout(`${backendUrl}/health`, {
-      method: 'GET',
-      headers
-    }, 5000);
+  const maxAttempts = 2;
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    try {
+      const response = await fetchWithTimeout(`${backendUrl}/health`, {
+        method: 'GET',
+        headers
+      }, 10000);
 
-    const payload = await response.json().catch(() => ({}));
-    return {
-      ok: response.ok,
-      backendUrl,
-      payload
-    };
-  } catch (error) {
-    return {
-      ok: false,
-      backendUrl,
-      error: error.message
-    };
+      const payload = await response.json().catch(() => ({}));
+      return {
+        ok: response.ok,
+        backendUrl,
+        payload
+      };
+    } catch (error) {
+      if (attempt < maxAttempts - 1) {
+        await new Promise(r => setTimeout(r, 1500));
+        continue;
+      }
+      return {
+        ok: false,
+        backendUrl,
+        error: error.message
+      };
+    }
   }
 }
 

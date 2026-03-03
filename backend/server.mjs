@@ -78,6 +78,10 @@ const SUPPORTED_OCR_ENGINES = [
 const SUPPORTED_OCR_ENGINE_IDS = new Set(SUPPORTED_OCR_ENGINES.map(engine => engine.id));
 
 const translationCache = new Map();
+const OCR_HEALTH_TTL_MS = Number(process.env.OCR_HEALTH_TTL_MS || 15000);
+const OCR_HEALTH_TIMEOUT_MS = Number(process.env.OCR_HEALTH_TIMEOUT_MS || 2500);
+let ocrHealthCache = null;
+let ocrHealthRefreshPromise = null;
 
 const OCR_PROMPT = `Tu es un expert en traduction de manga/manhwa.
 Analyse cette image de bande dessinee coreenne ou japonaise.
@@ -356,7 +360,7 @@ function normalizeIncomingBlock(block) {
   const translated = normalizeText(block.translated || block.translation || '');
   const bbox = normalizeBBox(block.bbox || block.box);
 
-  if (!original || !bbox) {
+  if (!original) {
     return null;
   }
 
@@ -383,7 +387,13 @@ function normalizeBlockList(blocks) {
   return blocks
     .map(normalizeIncomingBlock)
     .filter(Boolean)
-    .sort((a, b) => (a.bbox.y - b.bbox.y) || (a.bbox.x - b.bbox.x));
+    .sort((a, b) => {
+      const ay = a.bbox?.y ?? 1;
+      const by = b.bbox?.y ?? 1;
+      const ax = a.bbox?.x ?? 1;
+      const bx = b.bbox?.x ?? 1;
+      return (ay - by) || (ax - bx);
+    });
 }
 
 function translateCommonTerms(text) {
@@ -585,7 +595,7 @@ async function translateManyWithLocalModel(texts, source = 'en', target = 'fr') 
   }
 }
 
-async function getOcrServiceHealth() {
+async function probeOcrServiceHealth() {
   if (!config.ocrServiceUrl) {
     return {
       configured: false,
@@ -596,7 +606,7 @@ async function getOcrServiceHealth() {
   try {
     const response = await fetchJsonWithTimeout(`${config.ocrServiceUrl}/health`, {
       headers: { 'Accept': 'application/json' }
-    }, 3000);
+    }, OCR_HEALTH_TIMEOUT_MS);
 
     const payload = await response.json().catch(() => ({}));
     return {
@@ -613,6 +623,65 @@ async function getOcrServiceHealth() {
       error: error.message
     };
   }
+}
+
+function refreshOcrServiceHealth() {
+  if (ocrHealthRefreshPromise) {
+    return ocrHealthRefreshPromise;
+  }
+
+  ocrHealthRefreshPromise = probeOcrServiceHealth()
+    .then(value => {
+      ocrHealthCache = {
+        timestamp: Date.now(),
+        value
+      };
+      return value;
+    })
+    .finally(() => {
+      ocrHealthRefreshPromise = null;
+    });
+
+  return ocrHealthRefreshPromise;
+}
+
+function getOcrServiceHealthSnapshot() {
+  if (!config.ocrServiceUrl) {
+    return {
+      configured: false,
+      ok: false
+    };
+  }
+
+  const now = Date.now();
+  const isFresh = ocrHealthCache && (now - ocrHealthCache.timestamp) < OCR_HEALTH_TTL_MS;
+
+  if (isFresh) {
+    return {
+      ...ocrHealthCache.value,
+      stale: false,
+      refreshing: !!ocrHealthRefreshPromise
+    };
+  }
+
+  refreshOcrServiceHealth().catch(() => {});
+
+  if (ocrHealthCache?.value) {
+    return {
+      ...ocrHealthCache.value,
+      stale: true,
+      refreshing: true
+    };
+  }
+
+  return {
+    configured: true,
+    ok: false,
+    url: config.ocrServiceUrl,
+    stale: true,
+    refreshing: true,
+    warmingUp: true
+  };
 }
 
 async function translateWithGemini(text, context) {
@@ -903,18 +972,29 @@ async function ocrWithGemini(image, context) {
       }],
       generationConfig: {
         temperature: 0.1,
-        maxOutputTokens: 2048,
-        responseMimeType: 'application/json'
+        maxOutputTokens: 4096
       }
     })
-  }, 45000);
+  }, 60000);
 
   if (!response.ok) {
-    throw new Error(`Gemini OCR ${response.status}`);
+    const errBody = await response.text().catch(() => '');
+    throw new Error(`Gemini OCR ${response.status}: ${errBody.slice(0, 200)}`);
   }
 
   const data = await response.json();
-  return normalizeBlockList(parseAiResponse(data.candidates?.[0]?.content?.parts?.[0]?.text || ''));
+  const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+  const parsed = parseAiResponse(rawText);
+  console.log(`[OCR][Gemini] Raw response length=${rawText.length}, parsed blocks before normalize=${parsed.length}`);
+  if (parsed.length > 0 && parsed.length <= 3) {
+    console.log(`[OCR][Gemini] Sample block:`, JSON.stringify(parsed[0]).slice(0, 300));
+  }
+  const normalized = normalizeBlockList(parsed);
+  console.log(`[OCR][Gemini] After normalizeBlockList: ${normalized.length} bloc(s)`);
+  if (parsed.length > 0 && normalized.length === 0) {
+    console.warn(`[OCR][Gemini] Tous les blocs filtrés! Exemple brut:`, JSON.stringify(parsed[0]).slice(0, 400));
+  }
+  return normalized;
 }
 
 async function ocrWithOpenAI(image, context) {
@@ -922,38 +1002,59 @@ async function ocrWithOpenAI(image, context) {
     return null;
   }
 
-  const response = await fetchJsonWithTimeout('https://api.openai.com/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${config.openaiApiKey}`
-    },
-    body: JSON.stringify({
-      model: config.openaiVisionModel,
-      messages: [{
-        role: 'user',
-        content: [
-          { type: 'text', text: buildOcrPrompt(context) },
-          {
-            type: 'image_url',
-            image_url: {
-              url: `data:${image.mimeType};base64,${image.base64}`,
-              detail: 'high'
-            }
-          }
-        ]
-      }],
-      temperature: 0.1,
-      max_tokens: 2048
-    })
-  }, 45000);
+  const maxRetries = 2;
+  let lastError = null;
 
-  if (!response.ok) {
-    throw new Error(`OpenAI OCR ${response.status}`);
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    if (attempt > 0) {
+      const delay = 1000 * Math.pow(2, attempt - 1);
+      console.log(`[OCR][OpenAI] Retry ${attempt}/${maxRetries} après ${delay}ms`);
+      await new Promise(r => setTimeout(r, delay));
+    }
+
+    const response = await fetchJsonWithTimeout('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${config.openaiApiKey}`
+      },
+      body: JSON.stringify({
+        model: config.openaiVisionModel,
+        messages: [{
+          role: 'user',
+          content: [
+            { type: 'text', text: buildOcrPrompt(context) },
+            {
+              type: 'image_url',
+              image_url: {
+                url: `data:${image.mimeType};base64,${image.base64}`,
+                detail: 'high'
+              }
+            }
+          ]
+        }],
+        temperature: 0.1,
+        max_tokens: 4096
+      })
+    }, 60000);
+
+    if (response.status === 429 && attempt < maxRetries) {
+      lastError = new Error('OpenAI OCR 429 rate limited');
+      continue;
+    }
+
+    if (!response.ok) {
+      throw new Error(`OpenAI OCR ${response.status}`);
+    }
+
+    const data = await response.json();
+    const rawText = data.choices?.[0]?.message?.content || '';
+    const parsed = parseAiResponse(rawText);
+    console.log(`[OCR][OpenAI] Raw response length=${rawText.length}, parsed=${parsed.length}`);
+    return normalizeBlockList(parsed);
   }
 
-  const data = await response.json();
-  return normalizeBlockList(parseAiResponse(data.choices?.[0]?.message?.content || ''));
+  throw lastError || new Error('OpenAI OCR exhausted retries');
 }
 
 function scoreOcrResult(result) {
@@ -1222,8 +1323,8 @@ async function handleAiOcr(req, res, body) {
   }
 }
 
-async function handleHealth(res) {
-  const ocrPipeline = await getOcrServiceHealth();
+function handleHealth(res) {
+  const ocrPipeline = getOcrServiceHealthSnapshot();
   return sendJson(res, 200, {
     ok: true,
     userApiKeysRequired: false,

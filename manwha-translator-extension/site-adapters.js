@@ -30,6 +30,33 @@
 
   const SITE_ADAPTERS = [
     {
+      id: 'asura',
+      hosts: [/asuracomic/i, /asurascans/i],
+      strictSelectors: true,
+      selectors: [
+        'img[alt^="chapter page"]',
+        'img[alt="end page"]'
+      ],
+      filterImage(img) {
+        const alt = (img.getAttribute('alt') || '').toLowerCase();
+        const src = resolveImageSource(img);
+        const className = typeof img.className === 'string' ? img.className.toLowerCase() : '';
+
+        if (/^chapter page \d+$/.test(alt)) {
+          return true;
+        }
+
+        return (
+          alt === 'end page' ||
+          (
+            src.includes('gg.asuracomic.net/storage/media/') &&
+            className.includes('object-cover') &&
+            className.includes('mx-auto')
+          )
+        );
+      }
+    },
+    {
       id: 'madara',
       hosts: [/asurascans/i, /reaperscans/i, /flamescans/i, /voidscans/i, /nightscans/i, /mangafire/i],
       readerRoots: ['.reading-content', '.entry-content', '.chapter-content', '.container-chapter-reader'],
@@ -116,16 +143,23 @@
 
   function collectCandidateImages(doc = document) {
     const adapter = getActiveAdapter(doc.location?.href || location.href);
-    const selectors = new Set([
-      ...GENERIC_SELECTORS,
-      ...(adapter?.selectors || [])
-    ]);
+    const selectors = new Set(
+      adapter?.strictSelectors
+        ? [...(adapter?.selectors || GENERIC_SELECTORS)]
+        : [
+            ...GENERIC_SELECTORS,
+            ...(adapter?.selectors || [])
+          ]
+    );
 
     const candidates = [];
     for (const selector of selectors) {
       doc.querySelectorAll(selector).forEach(node => {
         if (node?.tagName === 'IMG' && !candidates.includes(node)) {
-          candidates.push(primeImageElement(node));
+          const primed = primeImageElement(node);
+          if (!adapter?.filterImage || adapter.filterImage(primed)) {
+            candidates.push(primed);
+          }
         }
       });
     }

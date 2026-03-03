@@ -1,7 +1,7 @@
 // Content Script - Manwha Translator
 // Runs on all pages to detect and translate manwha scans
 
-(function() {
+(function () {
   'use strict';
 
   // State
@@ -467,10 +467,19 @@
     return response;
   }
 
-  async function ensureBackendAvailable() {
-    const health = await sendRuntimeMessage({ action: 'backendHealth' });
-    if (health?.ok) {
-      return true;
+  async function ensureBackendAvailable(retries = 3, delayMs = 2000) {
+    for (let attempt = 0; attempt < retries; attempt++) {
+      if (attempt > 0) {
+        await new Promise(r => setTimeout(r, delayMs));
+      }
+      try {
+        const health = await sendRuntimeMessage({ action: 'backendHealth' });
+        if (health?.ok) {
+          return true;
+        }
+      } catch (_) {
+        // Retry
+      }
     }
 
     const guidance = await sendRuntimeMessage({ action: 'startupGuidance' });
@@ -688,7 +697,7 @@
             action: 'cacheTranslation',
             key: cacheKey,
             translation
-          }).catch(() => {});
+          }).catch(() => { });
         }
       });
     } catch (e) {
@@ -1334,8 +1343,8 @@
     );
     const emphasis = style.emphasis || (
       block.type === 'sfx' ? 'extreme' :
-      ['angry', 'urgent', 'dramatic'].includes(block.tone) ? 'strong' :
-      'normal'
+        ['angry', 'urgent', 'dramatic'].includes(block.tone) ? 'strong' :
+          'normal'
     );
     const align = style.align || getDefaultAlign(block);
     const italic = typeof style.italic === 'boolean'
@@ -1343,8 +1352,8 @@
       : block.type === 'narration' || block.type === 'thought';
     const fontWeight = clamp(Number(style.weight) || (
       emphasis === 'extreme' ? 900 :
-      emphasis === 'strong' ? 800 :
-      block.type === 'narration' ? 700 : 750
+        emphasis === 'strong' ? 800 :
+          block.type === 'narration' ? 700 : 750
     ), 400, 900);
     const casing = style.casing || (block.type === 'sfx' ? 'upper' : 'mixed');
 
@@ -2083,10 +2092,10 @@
     const canvas = document.createElement('canvas');
     const ctx = canvas.getContext('2d', { willReadFrequently: true });
     const sourceCtx = sourceCanvas.getContext('2d', { willReadFrequently: true });
-    
+
     canvas.width = sourceCanvas.width;
     canvas.height = sourceCanvas.height;
-    
+
     // Draw original image
     ctx.drawImage(sourceCanvas, 0, 0);
 
@@ -2180,13 +2189,13 @@
       ctx.fillStyle = 'rgba(255, 255, 255, 0.95)';
       ctx.strokeStyle = '#000000';
       ctx.lineWidth = 2;
-      
+
       const padding = 10;
       const bubbleX = block.x - padding;
       const bubbleY = block.y - padding;
       const bubbleWidth = block.width + padding * 2;
       const bubbleHeight = block.height + padding * 2;
-      
+
       drawRoundedRectPath(ctx, bubbleX, bubbleY, bubbleWidth, bubbleHeight, 10);
       ctx.fill();
       ctx.stroke();
@@ -2307,18 +2316,18 @@
     if (isTranslating) {
       return { success: false, error: 'Une traduction est deja en cours' };
     }
-    
+
     isTranslating = true;
     pageTranslationContext = await loadChapterContext();
     const storedSettings = await loadStoredSettings();
     settings = { ...settings, ...storedSettings, ...userSettings };
-    
+
     try {
       updateProgress(2, 'Vérification du backend OCR...');
       await ensureBackendAvailable();
 
       imageElements = detectManwhaImages();
-      
+
       if (imageElements.length === 0) {
         updateProgress(100, 'Aucune image de manwha détectée');
         return { success: true, translatedCount: 0 };
@@ -2335,7 +2344,7 @@
 
       let translatedCountForRun = 0;
       const total = imageElements.length;
-      const concurrency = Math.min(5, total);
+      const concurrency = Math.min(2, total);
       let nextIndex = 0;
 
       async function worker() {
@@ -2366,9 +2375,9 @@
           translatedCount: translatedImages.size
         }, () => void chrome.runtime.lastError);
       } catch (_) { /* popup fermé */ }
-      
-      return { 
-        success: true, 
+
+      return {
+        success: true,
         translatedCount: translatedCountForRun
       };
 
@@ -2381,7 +2390,7 @@
   }
 
   // Eager background translation pipeline
-  const EAGER_CONCURRENCY = 5;
+  const EAGER_CONCURRENCY = 2;
   const eagerQueue = [];
   let eagerRunning = 0;
   let eagerBackendOk = null;
@@ -2413,16 +2422,17 @@
 
   async function eagerProcessImage(img) {
     try {
-      if (eagerBackendOk === null) {
+      if (eagerBackendOk !== true) {
         try {
-          await ensureBackendAvailable();
+          await ensureBackendAvailable(4, 3000);
           eagerBackendOk = true;
         } catch (e) {
-          eagerBackendOk = false;
+          // Don't permanently give up — allow retries on next image
+          console.warn('[ManwhaTranslator] Eager: backend not available yet, will retry later');
+          eagerBackendOk = null;
           return;
         }
       }
-      if (!eagerBackendOk) return;
 
       const total = detectManwhaImages().length || 1;
       const index = 0;
@@ -2534,7 +2544,7 @@
 
   // Auto-translate observer
   let autoTranslateObserver = null;
-  
+
   function setupAutoTranslate() {
     if (autoTranslateObserver) {
       autoTranslateObserver.disconnect();
@@ -2544,7 +2554,7 @@
 
     autoTranslateObserver = new MutationObserver((mutations) => {
       let shouldTranslate = false;
-      
+
       mutations.forEach(mutation => {
         mutation.addedNodes.forEach(node => {
           if (node.tagName === 'IMG' && isManwhaImage(node)) {
@@ -2589,12 +2599,12 @@
           const singleResult = await translateSingleImage(request.srcUrl, request.settings);
           sendResponse(singleResult);
           break;
-          
+
         case 'reset':
           resetTranslations();
           sendResponse({ success: true });
           break;
-          
+
         case 'setAutoTranslate':
           autoTranslate = request.value;
           if (request.settings) {
@@ -2603,7 +2613,7 @@
           setupAutoTranslate();
           sendResponse({ success: true });
           break;
-          
+
         case 'getStats':
           sendResponse({
             imageCount: imageElements.length,
