@@ -629,11 +629,11 @@ async function translateWithGemini(text, context) {
         parts: [{ text: buildTranslationPrompt(text, context) }]
       }],
       generationConfig: {
-        temperature: 0.15,
-        maxOutputTokens: 512
+        temperature: 0.1,
+        maxOutputTokens: 256
       }
     })
-  }, 20000);
+  }, 12000);
 
   if (!response.ok) {
     throw new Error(`Gemini translation ${response.status}`);
@@ -660,10 +660,10 @@ async function translateWithOpenAI(text, context) {
         role: 'user',
         content: buildTranslationPrompt(text, context)
       }],
-      temperature: 0.15,
-      max_tokens: 512
+      temperature: 0.1,
+      max_tokens: 256
     })
-  }, 20000);
+  }, 12000);
 
   if (!response.ok) {
     throw new Error(`OpenAI translation ${response.status}`);
@@ -1049,21 +1049,43 @@ async function handleTranslate(req, res, body) {
   return sendJson(res, 200, { translation });
 }
 
+async function runWithConcurrency(tasks, limit = 5) {
+  const results = new Array(tasks.length);
+  let nextIndex = 0;
+
+  async function worker() {
+    while (nextIndex < tasks.length) {
+      const i = nextIndex;
+      nextIndex += 1;
+      results[i] = await tasks[i]();
+    }
+  }
+
+  await Promise.all(
+    Array.from({ length: Math.min(limit, tasks.length) }, () => worker())
+  );
+  return results;
+}
+
 async function handleBatchTranslate(req, res, body) {
   if (!assertAuth(req)) {
     return sendJson(res, 401, { error: 'Unauthorized' });
   }
 
-  const texts = Array.isArray(body?.texts) ? body.texts : [];
+  const rawTexts = Array.isArray(body?.texts) ? body.texts : [];
+  const texts = rawTexts.filter(t => typeof t === 'string' && t.trim().length > 0);
   const context = body?.context || null;
 
   if (texts.length === 0) {
     return sendJson(res, 400, { error: 'Missing texts array' });
   }
 
-  const results = await Promise.all(
-    texts.map(text => translateTextCached(normalizeText(text), context))
-  );
+  if (texts.length > 50) {
+    return sendJson(res, 400, { error: 'Batch size exceeds limit of 50' });
+  }
+
+  const tasks = texts.map(text => () => translateTextCached(normalizeText(text), context));
+  const results = await runWithConcurrency(tasks, 5);
 
   return sendJson(res, 200, { translations: results });
 }

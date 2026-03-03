@@ -27,6 +27,12 @@ manwha-translator-extension/branding/*.png
 !manwha-translator-extension/branding/store-tile-small.png
 !manwha-translator-extension/branding/store-tile-large.png
 
+# IDE / AI
+.claude/
+
+# Images générées racine
+ChatGPT Image *.png
+
 # Artefacts anciens
 manwha-translator-extension/lib/
 manwha-translator-extension/zi*

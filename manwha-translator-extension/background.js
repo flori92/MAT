@@ -309,6 +309,17 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         .then(translation => sendResponse({ translation }))
         .catch(() => sendResponse({ translation: null }));
       return true;
+
+    case 'progress':
+    case 'stats':
+      // Relay to popup if open — fire-and-forget
+      sendResponse({ ok: true });
+      return false;
+
+    default:
+      // Unknown action — acknowledge to prevent runtime.lastError
+      sendResponse({ ignored: true });
+      return false;
   }
 });
 

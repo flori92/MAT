@@ -10,7 +10,16 @@
   let translatedImages = new Map();
   let imageElements = [];
   let pageTranslationContext = [];
+  const MEMORY_CACHE_MAX = 500;
   const memoryCache = new Map();
+
+  function memoryCacheSet(key, value) {
+    if (memoryCache.size >= MEMORY_CACHE_MAX) {
+      const firstKey = memoryCache.keys().next().value;
+      memoryCache.delete(firstKey);
+    }
+    memoryCache.set(key, value);
+  }
   let settings = {
     displayMode: 'overlay',
     ocrEngine: 'auto',
@@ -159,7 +168,7 @@
       });
 
       if (cached && cached.translation) {
-        memoryCache.set(cacheKey, cached.translation);
+        memoryCacheSet(cacheKey, cached.translation);
         return cached.translation;
       }
 
@@ -171,7 +180,7 @@
       const translation = remoteTranslation?.translation || null;
 
       if (translation) {
-        memoryCache.set(cacheKey, translation);
+        memoryCacheSet(cacheKey, translation);
         sendRuntimeMessage({
           action: 'cacheTranslation',
           key: cacheKey,
@@ -396,7 +405,7 @@
   }
 
   function canvasToBackendImagePayload(canvas) {
-    const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+    const dataUrl = canvas.toDataURL('image/jpeg', 0.92);
     return {
       base64: dataUrl.split(',')[1],
       mimeType: 'image/jpeg',
@@ -618,8 +627,8 @@
   async function batchTranslateTexts(texts) {
     if (texts.length === 0) return new Map();
 
-    const uncached = [];
     const results = new Map();
+    const uncachedSet = new Set();
 
     for (const text of texts) {
       const cacheKey = getTranslationCacheKey(text);
@@ -627,31 +636,41 @@
       if (memoryCached) {
         results.set(text, memoryCached);
       } else {
-        uncached.push(text);
+        uncachedSet.add(text);
       }
     }
 
+    const uncached = [...uncachedSet];
     if (uncached.length === 0) return results;
 
-    const response = await sendRuntimeMessage({
-      action: 'batchTranslate',
-      texts: uncached
-    });
+    try {
+      const response = await sendRuntimeMessage({
+        action: 'batchTranslate',
+        texts: uncached
+      });
 
-    const translations = response?.translations || [];
-    uncached.forEach((text, i) => {
-      const translation = translations[i] || null;
-      if (translation) {
-        const cacheKey = getTranslationCacheKey(text);
-        memoryCache.set(cacheKey, translation);
-        results.set(text, translation);
-        sendRuntimeMessage({
-          action: 'cacheTranslation',
-          key: cacheKey,
-          translation
-        });
+      if (response?.error) {
+        console.warn('[ManwhaTranslator] Batch translation failed:', response.error);
+        return results;
       }
-    });
+
+      const translations = response?.translations || [];
+      uncached.forEach((text, i) => {
+        const translation = translations[i] || null;
+        if (translation) {
+          const cacheKey = getTranslationCacheKey(text);
+          memoryCacheSet(cacheKey, translation);
+          results.set(text, translation);
+          sendRuntimeMessage({
+            action: 'cacheTranslation',
+            key: cacheKey,
+            translation
+          }).catch(() => {});
+        }
+      });
+    } catch (e) {
+      console.warn('[ManwhaTranslator] Batch translation error:', e.message);
+    }
 
     return results;
   }
@@ -886,6 +905,8 @@
     return refineAiBlocks(matchedBlocks, sourceCtx);
   }
 
+  const processingInFlight = new Set();
+
   // Process a single image
   async function processImage(img, index, total) {
     const existingEntry = translatedImages.get(img);
@@ -895,34 +916,36 @@
       translatedImages.delete(img);
     }
 
+    // Prevent duplicate processing of same image
+    if (processingInFlight.has(currentSrc)) return false;
+    processingInFlight.add(currentSrc);
+
     try {
-      updateProgress(Math.round((index / total) * 100), 
+      updateProgress(Math.round((index / total) * 100),
         `Traitement de l'image ${index + 1}/${total}...`);
 
-      // Get image data
       const canvas = document.createElement('canvas');
       const ctx = canvas.getContext('2d', { willReadFrequently: true });
-      
-      // Handle cross-origin images
       const imgToProcess = await loadImageForProcessing(img);
-
       canvas.width = imgToProcess.naturalWidth;
       canvas.height = imgToProcess.naturalHeight;
       ctx.drawImage(imgToProcess, 0, 0);
 
-      let translatedBlocks = [];
-      let extractedTextBlocks = null;
       const selectedEngine = settings.ocrEngine || 'auto';
       const engine = selectedEngine === 'tesseract' ? 'auto' : selectedEngine;
 
+      updateProgress(Math.round((index / total) * 100),
+        `OCR backend — image ${index + 1}/${total}...`);
+      const aiResult = await requestAiOcr(
+        canvas,
+        engine,
+        buildAiContext(index, total)
+      );
+
+      let translatedBlocks = [];
+      let extractedTextBlocks = null;
+
       try {
-        updateProgress(Math.round((index / total) * 100),
-          `🧩 OCR backend — image ${index + 1}/${total}...`);
-        const aiResult = await requestAiOcr(
-          canvas,
-          engine,
-          buildAiContext(index, total)
-        );
 
         if (aiResult && aiResult.blocks && aiResult.blocks.length > 0) {
           const aiBlocks = await finalizeAiBlocks(
@@ -971,8 +994,9 @@
       return true;
 
     } catch (error) {
-      console.error('Error processing image:', error);
       return false;
+    } finally {
+      processingInFlight.delete(currentSrc);
     }
   }
 
@@ -1887,11 +1911,13 @@
       await ensureBackendAvailable();
 
       const translated = await processImage(targetImage, 0, 1);
-      chrome.runtime.sendMessage({
-        action: 'stats',
-        imageCount: 1,
-        translatedCount: translated ? 1 : 0
-      });
+      try {
+        chrome.runtime.sendMessage({
+          action: 'stats',
+          imageCount: 1,
+          translatedCount: translated ? 1 : 0
+        }, () => void chrome.runtime.lastError);
+      } catch (_) { /* popup fermé */ }
 
       return {
         success: translated,
@@ -2120,11 +2146,13 @@
 
   // Update progress
   function updateProgress(percent, status) {
-    chrome.runtime.sendMessage({
-      action: 'progress',
-      percent,
-      status
-    });
+    try {
+      chrome.runtime.sendMessage({
+        action: 'progress',
+        percent,
+        status
+      }, () => void chrome.runtime.lastError);
+    } catch (_) { /* popup fermé */ }
   }
 
   // Main translate function
@@ -2150,15 +2178,17 @@
       }
 
       // Update stats
-      chrome.runtime.sendMessage({
-        action: 'stats',
-        imageCount: imageElements.length,
-        translatedCount: translatedImages.size
-      });
+      try {
+        chrome.runtime.sendMessage({
+          action: 'stats',
+          imageCount: imageElements.length,
+          translatedCount: translatedImages.size
+        }, () => void chrome.runtime.lastError);
+      } catch (_) { /* popup fermé */ }
 
       let translatedCountForRun = 0;
       const total = imageElements.length;
-      const concurrency = Math.min(3, total);
+      const concurrency = Math.min(5, total);
       let nextIndex = 0;
 
       async function worker() {
@@ -2182,11 +2212,13 @@
 
       updateProgress(100, 'Traduction terminée !');
 
-      chrome.runtime.sendMessage({
-        action: 'stats',
-        imageCount: imageElements.length,
-        translatedCount: translatedImages.size
-      });
+      try {
+        chrome.runtime.sendMessage({
+          action: 'stats',
+          imageCount: imageElements.length,
+          translatedCount: translatedImages.size
+        }, () => void chrome.runtime.lastError);
+      } catch (_) { /* popup fermé */ }
       
       return { 
         success: true, 
@@ -2201,6 +2233,126 @@
     }
   }
 
+  // Eager background translation pipeline
+  const EAGER_CONCURRENCY = 5;
+  const eagerQueue = [];
+  let eagerRunning = 0;
+  let eagerBackendOk = null;
+  let eagerMutObserver = null;
+
+  function eagerEnqueue(img) {
+    const src = img.currentSrc || img.src;
+    if (!src) return;
+    if (translatedImages.has(img)) return;
+    if (img.dataset.manwhaEagerQueued) return;
+
+    img.dataset.manwhaEagerQueued = 'true';
+    eagerQueue.push(img);
+    eagerDrain();
+  }
+
+  async function eagerDrain() {
+    while (eagerRunning < EAGER_CONCURRENCY && eagerQueue.length > 0) {
+      const img = eagerQueue.shift();
+      if (translatedImages.has(img)) continue;
+
+      eagerRunning += 1;
+      eagerProcessImage(img).finally(() => {
+        eagerRunning -= 1;
+        eagerDrain();
+      });
+    }
+  }
+
+  async function eagerProcessImage(img) {
+    try {
+      if (eagerBackendOk === null) {
+        try {
+          await ensureBackendAvailable();
+          eagerBackendOk = true;
+        } catch (e) {
+          eagerBackendOk = false;
+          return;
+        }
+      }
+      if (!eagerBackendOk) return;
+
+      const total = detectManwhaImages().length || 1;
+      const index = 0;
+      await processImage(img, index, total);
+    } catch (e) {
+      // Background failure is non-critical
+    }
+  }
+
+  function setupEagerPipeline() {
+    // Process all currently detected manhwa images
+    const images = detectManwhaImages();
+    for (const img of images) {
+      eagerEnqueue(img);
+    }
+
+    // Watch for new images added to the DOM (lazy-loading)
+    if (eagerMutObserver) {
+      eagerMutObserver.disconnect();
+    }
+
+    eagerMutObserver = new MutationObserver((mutations) => {
+      const newImages = [];
+
+      for (const mutation of mutations) {
+        for (const node of mutation.addedNodes) {
+          if (node.nodeName === 'IMG' && isManwhaImage(node)) {
+            newImages.push(node);
+          } else if (node.querySelectorAll) {
+            for (const img of node.querySelectorAll('img')) {
+              if (isManwhaImage(img)) {
+                newImages.push(img);
+              }
+            }
+          }
+        }
+      }
+
+      for (const img of newImages) {
+        eagerEnqueue(img);
+      }
+    });
+
+    eagerMutObserver.observe(document.body, { childList: true, subtree: true });
+
+    // Also catch images that load later (src changes, lazy src swap)
+    const loadObserver = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (entry.isIntersecting) {
+            const img = entry.target;
+            if (isManwhaImage(img) && !translatedImages.has(img) && !img.dataset.manwhaEagerQueued) {
+              eagerEnqueue(img);
+            }
+          }
+        }
+      },
+      { rootMargin: '100% 0px 100% 0px' }
+    );
+
+    document.querySelectorAll('img').forEach(img => loadObserver.observe(img));
+
+    // Observe new images for intersection too
+    const imgLoadMutObserver = new MutationObserver((mutations) => {
+      for (const mutation of mutations) {
+        for (const node of mutation.addedNodes) {
+          if (node.nodeName === 'IMG') {
+            loadObserver.observe(node);
+          } else if (node.querySelectorAll) {
+            node.querySelectorAll('img').forEach(img => loadObserver.observe(img));
+          }
+        }
+      }
+    });
+    imgLoadMutObserver.observe(document.body, { childList: true, subtree: true });
+  }
+
   // Reset translations
   function resetTranslations() {
     translatedImages.forEach((data, img) => {
@@ -2210,17 +2362,27 @@
       delete img.dataset.manwhaTranslated;
     });
     translatedImages.clear();
-    
+    memoryCache.clear();
+    eagerQueue.length = 0;
+    eagerBackendOk = null;
+
+    // Clear eager queued markers
+    document.querySelectorAll('[data-manwha-eager-queued]').forEach(img => {
+      delete img.dataset.manwhaEagerQueued;
+    });
+
     // Remove overlays
     document.querySelectorAll('.manwha-translator-overlay, .manwha-translator-toggle').forEach(el => {
       el.remove();
     });
 
-    chrome.runtime.sendMessage({
-      action: 'stats',
-      imageCount: imageElements.length,
-      translatedCount: 0
-    });
+    try {
+      chrome.runtime.sendMessage({
+        action: 'stats',
+        imageCount: imageElements.length,
+        translatedCount: 0
+      }, () => void chrome.runtime.lastError);
+    } catch (_) { /* popup fermé */ }
   }
 
   // Auto-translate observer
@@ -2311,10 +2473,12 @@
     autoTranslate = storedSettings.autoTranslate;
     settings = { ...settings, ...storedSettings };
 
+    // Start eager background translation pipeline immediately
+    // Processes ALL manhwa images as soon as the page loads
+    setTimeout(() => setupEagerPipeline(), 1500);
+
     if (autoTranslate) {
       setupAutoTranslate();
-      // Auto-translate on page load
-      setTimeout(() => translatePage(), 2000);
     }
   });
 
